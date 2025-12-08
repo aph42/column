@@ -1,0 +1,30 @@
+{
+  "version": "1.0.0",
+  "name": "Chapman Radiative-Photochemical Equilibrium",
+  "constants": {
+      "T0Cel":   273.15,
+      "p0"   :  1000,
+      "H"    :  7000,
+      "cp"   :  1004,
+      "Rd"   :   287,
+      "g0"   :     9.81
+  },
+  "grid": {
+      "Nz"       :  200,
+      "spacing"  : "log_pres_equal",
+      "p_top"    :    0.01
+  },
+  "radiation": {
+      "scon" :  1368.22,
+      "date" :  "2000-03-01T00:00",
+      "lat"  :  22.3
+  },
+  "chemistry": "chapman",
+  "dynamics": {
+     "advected_tracers": [
+         "T",
+         "O3",
+         "O1D"
+     ]
+  }
+}
