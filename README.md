@@ -4,9 +4,9 @@ Radiative/photochemical column model built around MUSICA and TUVx
 
 ## Dependencies
 
--Musica
--RRTMg
--TUV-x (not yet)
+    - Musica
+    - RRTMg
+    - TUV-x (not yet)
 
 ## Grid
 
@@ -21,5 +21,6 @@ and chemical species are defined on full-levels.
 
 The advective tendency for a quantity $X$ at full level $j$ is approximated as
 
-$$ (\omega \frac{dX}{dp})_j = \frac{1}{2} \omega_{i + 1/2}$$
+$$ (\omega \frac{dX}{dp})_j = \frac{1}{2} \omega_{i + \frac{1}{2}} \frac{X_{j+1} - X_j}{\Delta p_j}
++ \frac{1}{2} \omega_{i - \frac{1}{2}} \frac{X_{j} - X_{j-1}}{\Delta p_j} $$
 
