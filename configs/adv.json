@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "name": "Chapman Radiative-Photochemical Equilibrium",
+  "name": "Advection Test",
   "constants": {
       "T0Cel":   273.15,
       "p0"   :  1000,
@@ -12,7 +12,7 @@
   "grid": {
       "Nz"       :  200,
       "spacing"  : "log_pres_equal",
-      "p_top"    :    0.01
+      "p_top"    :    2.0
   },
   "radiation": {
       "scon" :  1368.22,
@@ -26,7 +26,7 @@
      "advected_tracers": [
          "T",
          "O3",
-         "O1D"
+         "H2O"
      ]
   }
 }
