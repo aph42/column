@@ -1,0 +1,45 @@
+{
+  "version": "1.0.0",
+  "name": "Decay",
+  "species": [
+    {
+      "name": "O3",
+      "molecular weight [kg mol-1]": 0.048,
+      "__absolute tolerance": 1e-12,
+      "__long name": "ozone",
+      "__atoms": 3,
+      "__do advect": true
+    },
+    {
+      "name": "H2O",
+      "molecular weight [kg mol-1]":  0.018,
+      "__absolute tolerance": 1e-12,
+      "__long name": "water vapor",
+      "__do advect": true
+    },
+    {
+      "name": "CO2",
+      "molecular weight [kg mol-1]": 0.044,
+      "__absolute tolerance": 1e-12,
+       "__long name": "carbon dioxide"
+    }
+  ],
+  "phases": [
+    {
+      "name": "gas",
+      "species": [
+        "O3",
+        "H2O",
+        "CO2"
+      ]
+    }
+  ],
+  "reactions": [
+    {
+      "type": "FIRST_ORDER_LOSS",
+      "gas phase": "gas",
+      "species name": "O3",
+      "name": "O3loss"
+    }
+  ]
+}
