@@ -309,7 +309,7 @@ class Column():
       self.wp[0] = 0.
       self.wp[self.Nz] = 0.
 
-      self.initialize_scalar('omega', 'd-1', 2 * np.pi / 840.)
+      self.initialize_scalar('omega', 'd-1', 2 * np.pi / (86400. * 840.))
    # }}}
 
    def initialize_radiation(self, *, scon = 1368.22, **kwargs):
@@ -445,8 +445,8 @@ class Column():
       for i in range(I):
          # Interpolate velocity and acceleration to origin points
          aS = 0.5 * (state.w[j_now, 1:] + state.w[j_now, :-1]) * (state.w[j_now, 1:] - state.w[j_now, :-1]) / dz
-         wS = np.interp(zorg, self.zhalf, state.w[j_now, :])
-         aS = np.interp(zorg, self.zfull, aS)
+         wS = np.interp(zorg[::-1], self.zhalf[::-1], state.w[j_now, ::-1])[::-1]
+         aS = np.interp(zorg[::-1], self.zfull[::-1], aS[::-1])[::-1]
 
          # Past half of trajectory
          c1 = dth * wS + 0.5 * dth**2 * aS
@@ -455,9 +455,9 @@ class Column():
       return zorg
    # }}}
 
-   def update_externals(self, state, j_now, j_new, t):
+   def update_externals(self, state, j, t):
    # {{{
-      state.w[j_new, :] = self.w + np.real(self.wp * np.exp(1j * self.omega * t))
+      state.w[j, :] = self.w + np.real(self.wp * np.exp(1j * self.omega * t))
    # }}}
 
    def solve(self, nsteps, dt, output_freq = 1):
@@ -473,37 +473,40 @@ class Column():
       i_step = 0
       i_out = 0
 
-      #self.compute_radiation(s0, o0, 0, i_out)
-      self.save_state(s0, o0, 0, i_out)
-
       i_out += 1
 
       # Advective coefficients
       dz = self.zhalf[1:] - self.zhalf[:-1]
-      Cp = -1 / (2 * self.cfg.H * (np.exp(dz / self.cfg.H) - 1))
-      Cm = -1 / (2 * self.cfg.H * (1 - np.exp(-dz / self.cfg.H)))
+      #Cp = -1 / (2 * self.cfg.H * (np.exp(dz / self.cfg.H) - 1))
+      #Cm = -1 / (2 * self.cfg.H * (1 - np.exp(-dz / self.cfg.H)))
 
       #Cp = -1 / (2 * dz)
       #Cm = -1 / (2 * dz)
 
-      print(Cp[0], Cm[0])
+      #print(Cp[0], Cm[0])
 
-      print('courant: %.3g' % (np.max(self.w + np.absolute(self.wp)) * dt * 86400. / dz[5]))
+      print('courant: %.3g' % (np.max(self.w + np.absolute(self.wp)) * dt / dz[5]))
 
-      def build_advection_matrix(w, i):
-         if i == -1: 
-            print(-w[ :-2] * Cm[:-1],
-                   w[ :-1] * Cm - w[1:] * Cp,
-                   w[2:  ] * Cp[1:])
-         return sparse.diags([-w[ :-2] * Cm[:-1],
-                               w[ :-1] * Cm - w[1:] * Cp,
-                               w[2:  ] * Cp[1:]],
-                             [-1, 0, 1], shape = (self.Nz, self.Nz), format = 'csr')
+      #def build_advection_matrix(w, i):
+         #if i == -1: 
+            #print(-w[ :-2] * Cm[:-1],
+                   #w[ :-1] * Cm - w[1:] * Cp,
+                   #w[2:  ] * Cp[1:])
+         #return sparse.diags([-w[ :-2] * Cm[:-1],
+                               #w[ :-1] * Cm - w[1:] * Cp,
+                               #w[2:  ] * Cp[1:]],
+                             #[-1, 0, 1], shape = (self.Nz, self.Nz), format = 'csr')
 
       #dAdv = np.ones(self.Nz, 'd')
 
-      r = 0.0
+      #r = 0.0
       j_old, j_now, j_new = 0, 1, 2
+
+      self.update_externals(s0, j_old, -1 * dt)
+      self.update_externals(s0, j_now, 0.)
+
+      #self.compute_radiation(s0, o0, 0, i_out)
+      self.save_state(s0, o0, 0, i_out)
 
       for i in range(nsteps):
          # Diabatic tendencies
@@ -528,9 +531,9 @@ class Column():
             #print(s0.H2O[0, 53])
             #s0.H2O[j_now, :] = (1-2*r)*s0.H2O[j_now, :] + r*(s0.H2O[j_new, :] + s0.H2O[j_old, :])
 
-         self.update_externals(s0, j_now, j_new, i * dt)
+         self.update_externals(s0, j_new, (i + 1) * dt)
 
-         zorg = self.get_origins(s0, j_now, j_new, dt * 86400.)
+         zorg = self.get_origins(s0, j_now, j_new, dt)
          L = interpolate_matrix(zorg[::-1], self.zfull[::-1], method='cubic')
          s0.H2O[j_now, :] = (L @ s0.H2O[j_old][::-1])[::-1]
 
@@ -549,7 +552,7 @@ class Column():
 import pygeode as pyg
 def to_pyg(col, ts, out, init = None):
 # {{{
-   time = pyg.Yearless(ts, units = 'days', startdate = dict(year = 1, day = 0))
+   time = pyg.Yearless(ts / 86400., units = 'days', startdate = dict(year = 1, day = 0))
    pfull = pyg.Pres(col.pfull, name = 'pfull')
    phalf = pyg.Pres(col.phalf, name = 'phalf')
    zfull = pyg.Height(col.zfull, name = 'zfull')
