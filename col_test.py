@@ -244,8 +244,8 @@ def test_advection_step(C = 0.2, Nz = 11, w0 = 0.02):
    col = column.Column(c)
 
    z0 = 20000.
-   Dz = 2000.
-   #Dz = 5000.
+   #Dz = 2000.
+   Dz = 5000.
 
    col.H2O[:] = np.exp(-(col.zfull - z0)**2 / (2 * Dz**2))
    #col.H2O[1] = 0.1
@@ -282,6 +282,10 @@ def test_advection_step(C = 0.2, Nz = 11, w0 = 0.02):
    #print('Stand alone method')
    #Cp, Dp, Delp = interpolate_matrix(z_org[::-1], col.zadv, method = 'cubic monotone')
 
+   #W = col.advect_quantity(C, D, Del, s0.H2O[0, ::-1])[::-1]
+   #return W
+   #print(W)
+
    s0.H2O[1, :] = col.advect_quantity(C, D, Del, s0.H2O[0, ::-1])[::-1]
    #H2On = col.advect_quantity(C, D, Del, s0.H2O[0, ::-1])[::-1]
 
@@ -312,20 +316,21 @@ def test_reaction():
 
    tau_o3 = 1. * 86400. # 10 day decay time
    col.w[:] = 0.0
-   col.w[1:160] = 0.02
+   col.w[1:-1] = 0.01
    col.O3[150:] = 10e-6
 
    taus = np.ones(col.Nz) / tau_o3
    taus[150:] = 0.
    col.MICMstate.set_user_defined_rate_parameters({'LOSS.O3loss': taus})
 
-   ts, o0 = col.solve(400, 1000.)
+   ts, o0 = col.solve(400, 2000.)
 
    ds = column.to_pyg(col, ts, o0)
 
    plt.ioff()
-   ax = pyg.showvar(ds.O3(zfull = 20000.))
-   pyg.vplot(10e-6 * pyg.exp(-ds.time * 86400. / tau_o3), ls = '--', axes = ax)
+   ax = pyg.showlines([ds.O3(i_time = t) for t in [0, 100, 200, 400]])
+
+   #pyg.vplot(10e-6 * pyg.exp(-ds.time * 86400. / tau_o3), ls = '--', axes = ax)
 
    plt.ion()
    ax.render(1)

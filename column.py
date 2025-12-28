@@ -479,7 +479,7 @@ class Column():
       #bnz = m[extn + 1] / d0[extn]
       #tau = 3 / np.sqrt(anz**2 + bnz**2)
       #tau = 3 * np.abs(d0[extn]) / np.sqrt(m[extn]**2 + m[extn + 1]**2 + 1e-16)
-      tau = 3 * np.abs(d0) / np.sqrt(m[:-1]**2 + m[1:]**2 + 1e-16)
+      tau = 3 * np.abs(d0) / np.sqrt(m[:-1]**2 + m[1:]**2 + 1e-32)
       #print('tau: ' + fmt(tau))
 
       nmt = np.where(tau < 1)[0]
@@ -503,9 +503,14 @@ class Column():
       L = (C + D @ T @ Del)
       #L = (C + D @ Del)
 
+      #print('L: ')
+      #print(L.tocsc())
+
       # Normalize weights
-      #N = L.sum(0).reshape(-1, 1)
-      #L = L / N
+      #N = L.sum(0)
+      #iN = np.where(N > 0.3)[0]
+      #print('N: ' + fmt(N[1:-1]))
+      #L[1:-1, :] = L[1:-1, :] / N[1:-1].reshape(-1, 1)
 
       # Apply interpolation
       return L @ X
@@ -515,14 +520,17 @@ class Column():
    # {{{
       C, D, Del = self.build_advection_matrix(z_org[::-1])
 
+      L = C + D @ Del
+
       # Convert temperature to potential temperature
-      #Theta = state.T[j_now, :] * self.Exner
+      Theta = state.T[j_now, :] * self.Exner
 
       # Advect potential temperature then convert back to temperature
-      #state.T[j_new, :] = (L @ Theta[::-1])[::-1] / self.Exner
+      state.T[j_new, :] = (L @ Theta[::-1])[::-1] / self.Exner
 
-      state.H2O[j_new, :] = self.advect_quantity(C, D, Del, state.H2O[j_now, ::-1])[::-1]
-      #state.O3 [j_new, :] = self.advect_quantity(C, D, Del, state.O3[j_now, ::-1])[::-1]
+      for s in self.advected:
+         v = state.columns[s]
+         v[j_new, :] = self.advect_quantity(C, D, Del, v[j_now, ::-1])[::-1]
    # }}}
 
 ### Methods related to radiative transfer
@@ -615,24 +623,30 @@ class Column():
       self.__dict__['MICMsolver'] = musica.MICM(mechanism = self.mechanism, solver_type = musica.SolverType.rosenbrock_standard_order)
       self.__dict__['MICMstate'] = self.MICMsolver.create_state(200)
 
+      species_list = []
+      advected_list = []
+
       for sp in self.mechanism.species:
-         self.initialize_species(sp)
-   # }}}
+         properties = {'molecular_weight': sp.molecular_weight_kg_mol}
+         properties.update(sp.other_properties)
 
-   def initialize_species(self, species):
-   # {{{ 
-      properties = {'molecular_weight': species.molecular_weight_kg_mol}
-      properties.update(species.other_properties)
+         name = sp.name
+         species_list.append(name)
 
-      name = species.name
-      advect = properties.pop('__do advect', False)
-      if advect == 'true': advect = True
-      else: advect = False
+         advect = properties.pop('__do advect', False)
+         if advect == 'true': 
+            advect = True
+            advected_list.append(name)
+         else: 
+            advect = False
 
-      if name in self.variables:
-         raise ValueError(f'{name} has already been initialized.')
-      
-      self.variables[name] = SpeciesVariable(name, 'vmr', self.Nz, 0., advect, **properties)
+         if name in self.variables:
+            raise ValueError(f'{name} has already been initialized.')
+         
+         self.variables[name] = SpeciesVariable(name, 'vmr', self.Nz, 0., advect, **properties)
+
+      self.__dict__['species'] = species_list
+      self.__dict__['advected'] = advected_list
    # }}}
 
    def step_chemistry(self, state, z_org, j_new, dt):
