@@ -37,9 +37,14 @@
   "reactions": [
     {
       "type": "FIRST_ORDER_LOSS",
+      "name": "O3loss",
       "gas phase": "gas",
-      "species name": "O3",
-      "name": "O3loss"
+      "reactants": [
+         {
+            "species name": "O3",
+            "coefficient": 1
+         }
+      ]
     }
   ]
 }

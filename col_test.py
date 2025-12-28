@@ -1,6 +1,9 @@
 import numpy as np
 from matplotlib import pyplot as plt
 
+from scipy import sparse
+from scipy.sparse.linalg import spsolve
+
 import pygeode as pyg
 
 import column
@@ -8,7 +11,97 @@ import column
 import adiabat
 from rrtm import astr
 
-def test_oscillation(C = 0.2, shape = 'gaussian', periods = 3):
+def interpolate_matrix(x_new, x_old, method = 'linear'):
+# {{{
+   ''' Constructs a CSR sparse matrix that, when applied to a vector
+   of quantities defined at locations x_old, yields interpolated values
+   at x_new. x_old and x_new must be sorted. '''
+
+   #print(x_new)
+   #print(x_old)
+
+   ip = x_old.searchsorted(x_new)
+   iL = np.where(ip == 0.)[0]
+   iR = np.where(ip == len(x_old))[0]
+
+   ip[iL] = 1
+   ip[iR] = len(x_old) - 1
+
+   i0 = ip - 1
+
+   dx = x_old[ip] - x_old[i0]
+   tn = (x_new - x_old[i0]) / dx
+   tn[iL] = 0.
+   tn[iR] = 1.
+
+   otn = 1 - tn
+
+   #print(i0, tn)
+   #print(x_new, x_old[i0] + tn * dx)
+
+   N = len(x_new)
+   M = len(x_old)
+
+   if method == 'linear':
+      order = 2
+      entries = np.zeros(N * order, 'd')
+      indptr = order * np.arange(N + 1)
+      cols = np.zeros(N * order, 'i')
+      cols[::order]  = i0
+      cols[1::order] = ip
+
+      entries[::order] = otn
+      entries[1::order] = tn
+
+      return sparse.csr_array((entries, cols, indptr), shape = (N, M))
+   elif 'cubic' in method:
+      Dl = np.zeros(M - 1)
+      Dc = np.zeros(M)
+      Dr = np.zeros(M - 1)
+
+      #Dr[0] = 1 / (x_old[-1] - x_old[-2])
+      #Dc[-1] = 1 / (x_old[1] - x_old[0])
+      #Dr[1:] = 1 / (x_old[2:] - x_old[:-2])
+      #Dl[:-1] = -Dr[1:]
+      #Dc[0] = -Dr[0]
+      #Dl[-1] = -Dc[-1]
+
+      Dx = np.diff(x_old)
+
+      Dr[1:  ] =  1 / (2 * Dx[:-1])
+      Dc[1:-1] = (Dx[1:] - Dx[:-1]) / (2 * Dx[1:] * Dx[:-1])
+      Dl[ :-1] = -1 / (2 * Dx[1:])
+
+      Del = sparse.diags_array([Dl, Dc, Dr], offsets = [-1, 0, 1], shape = (M,M), format = 'csr')
+
+      order = 2
+      Cdata = np.zeros(N * order, 'd')
+      Ddata = np.zeros(N * order, 'd')
+      indptr = order * np.arange(N + 1)
+      cols = np.zeros(N * order, 'i')
+      cols[::order]  = i0
+      cols[1::order] = ip
+
+      Cdata[::order] = otn**3 + 3*otn**2*tn
+      Cdata[1::order] = tn**3 + 3*tn**2*otn
+
+      Ddata[::order] = dx*otn**2*tn
+      Ddata[1::order] = -dx*tn**2*otn
+
+      C = sparse.csr_array((Cdata, cols, indptr), shape = (N, M))
+      D = sparse.csr_array((Ddata, cols, indptr), shape = (N, M))
+
+      if 'monotone' in method:
+         return C, D, Del
+      else:
+         return C + D @ Del
+   else:
+      raise ValueError(f'Unrecognized method {method}.')
+
+   return L
+# }}}
+
+def test_oscillation(C = 0.2, shape = 'gaussian', periods = 3, onestep = False):
 # {{{
    c = column.Configuration('adv.json', 'configs/')
    col = column.Column(c)
@@ -41,9 +134,12 @@ def test_oscillation(C = 0.2, shape = 'gaussian', periods = 3):
    
    dt = C * dz / wp
 
-   Tf = periods * period
-
-   nsteps = int(Tf / dt)
+   if onestep:
+      Tf = dt
+      nsteps = 1
+   else:
+      Tf = periods * period
+      nsteps = int(Tf / dt)
 
    dt = Tf / nsteps
    C = wp * dt / dz
@@ -103,7 +199,7 @@ def test_oscillation(C = 0.2, shape = 'gaussian', periods = 3):
    axs.render(8)
    #pyg.showvar(ds.H2O, fig=1, nozero=True)
 
-   return ds
+   return col, ds
 # }}} 
 
 def plot_origins(dt = 2000.):
@@ -111,7 +207,7 @@ def plot_origins(dt = 2000.):
    c = column.Configuration('adv.json', 'configs/')
    col = column.Column(c)
 
-   col.w[1:-1] = 2e-2
+   col.w[1:-1] = 2e-2 + 2e-2 * col.zhalf[1:-1] / col.z_top
    col.wp[1:-1] = 2e-2
 
    s0 = col.get_internal_state(n = 2)
@@ -122,6 +218,13 @@ def plot_origins(dt = 2000.):
 
    zorg = col.get_origins(s0, 0, 1, dt, I=2)
 
+   zs = np.concatenate([[col.z_bot], col.zfull[::-1], [col.z_top]])
+   ip = zs.searchsorted(zorg[::-1])
+   iL = np.where(ip == 0.)[0]
+   iR = np.where(ip == len(zs))[0]
+
+   #return ip, iL, iR
+
    # Half-point origins
    fg = plt.figure(1, (2., 4.))
    fg.clf()
@@ -131,55 +234,109 @@ def plot_origins(dt = 2000.):
    print(zorg[15] - col.zfull[15], -s0.w[0, 15] * dt)
 
    ax.plot(zorg - col.zfull, col.zfull, 'k+')
+   #ax.plot(ip, zorg, 'k+')
 # }}}
 
-def test_reaction():
+def test_advection_step(C = 0.2, Nz = 11, w0 = 0.02):
 # {{{
    c = column.Configuration('adv.json', 'configs/')
+   c.grid['Nz'] = Nz
    col = column.Column(c)
-
-   return col
 
    z0 = 20000.
    Dz = 2000.
+   #Dz = 5000.
 
-   if shape == 'gaussian':
-      col.H2O[:] = np.exp(-(col.zfull - z0)**2 / (2 * Dz**2))
-   elif shape == 'hanning':
-      iz0 = np.argmin((col.zfull - z0 - Dz)**2)
-      iz1 = np.argmin((col.zfull - z0 + Dz)**2)
-      col.H2O[iz0:iz1] = np.hanning(iz1 - iz0)
-   elif shape == 'box':
-      iz0 = np.argmin((col.zfull - z0 - Dz)**2)
-      iz1 = np.argmin((col.zfull - z0 + Dz)**2)
-      col.H2O[iz0:iz1] = 1.
-   else:
-      raise ValueError(f'Unrecognized shape "{shape}".')
+   col.H2O[:] = np.exp(-(col.zfull - z0)**2 / (2 * Dz**2))
+   #col.H2O[1] = 0.1
+   #col.H2O[2] = 0.1
+   #col.H2O[3] = 1.
+   #col.H2O[4] = 1.
+   #col.H2O[8] = -0.98
+   #col.H2O[9] = -1.
+   #col.H2O[10] = -1.
+   #col.H2O[11] = -0.9
+   #col.H2O[12] = -0.1
+   #col.H2O[14] = 0.4
+   #col.H2O[15] = 0.41
+   #col.H2O[15] = 0.01
 
-   # 30 day period for testing
-   period = 30. * 86400.
+   #w0 = 0.0
 
-   wp = 2e-2
-
-   col.w[1:-1] = 0e-2# + 1e-2 * (col.zhalf[1:-1] / col.z_top)
-   col.wp[1:-1] = wp
-   col.omega = 2*np.pi / period
+   col.w[1:-1] = w0# + 1e-2 * (col.zhalf[1:-1] / col.z_top)
+   #col.wp[1:-1] = wp
+   #col.omega = 2*np.pi / period
    dz = np.min(col.zfull[:-1] - col.zfull[1:])
    
-   dt = C * dz / wp
+   #dt = C * dz / np.absolute(w0)
+   dt = C * dz / np.sqrt(w0**2 + 0.01**2)
 
-   Tf = periods * period
+   s0 = col.get_internal_state(n = 2)
 
-   nsteps = int(Tf / dt)
+   z_org = col.get_origins(s0, 0, 1, dt)
+   #z_org = np.linspace(col.z_top, col.z_bot, 1001)
 
-   dt = Tf / nsteps
-   C = wp * dt / dz
+   #print('Internal method')
+   C, D, Del = col.build_advection_matrix(z_org[::-1])
 
-   print(f'Integrating {Tf / 86400.} days, {nsteps} steps.')
+   #print('Stand alone method')
+   #Cp, Dp, Delp = interpolate_matrix(z_org[::-1], col.zadv, method = 'cubic monotone')
 
-   ts, o0 = col.solve(nsteps, dt)
+   s0.H2O[1, :] = col.advect_quantity(C, D, Del, s0.H2O[0, ::-1])[::-1]
+   #H2On = col.advect_quantity(C, D, Del, s0.H2O[0, ::-1])[::-1]
+
+   print(np.diff(np.max(s0.H2O, 1)))
+
+   #print(C)
+   #print(Cp)
+   #print(D)
+   #print(Dp)
+   #print(Del)
+   #print(Delp)
+
+   f = plt.figure(1)
+   f.clf()
+   ax = f.add_subplot(111)
+
+   ax.plot(s0.H2O[0,:], col.zfull, 'ko')
+   ax.plot(s0.H2O[1,:], z_org, 'r+')
+   #ax.plot(H2On, z_org, 'r+')
+
+   #return s0, col
+# }}} 
+
+def test_reaction():
+# {{{
+   c = column.Configuration('mcm_test.json', 'configs/')
+   col = column.Column(c)
+
+   tau_o3 = 1. * 86400. # 10 day decay time
+   col.w[:] = 0.0
+   col.w[1:160] = 0.02
+   col.O3[150:] = 10e-6
+
+   taus = np.ones(col.Nz) / tau_o3
+   taus[150:] = 0.
+   col.MICMstate.set_user_defined_rate_parameters({'LOSS.O3loss': taus})
+
+   ts, o0 = col.solve(400, 1000.)
 
    ds = column.to_pyg(col, ts, o0)
+
+   plt.ioff()
+   ax = pyg.showvar(ds.O3(zfull = 20000.))
+   pyg.vplot(10e-6 * pyg.exp(-ds.time * 86400. / tau_o3), ls = '--', axes = ax)
+
+   plt.ion()
+   ax.render(1)
+
+   plt.ioff()
+   ax = pyg.showvar(ds.O3)
+
+   plt.ion()
+   ax.render(2)
+
+   return ds
 
    # Lower boundary
    z_low = (z0 - Dz) + wp / col.omega * pyg.sin(col.omega * ds.time * 86400.)

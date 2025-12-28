@@ -56,6 +56,20 @@ class ColumnVariable():
       self.output = output
    # }}}
 
+class SpeciesVariable(ColumnVariable):
+   def __init__(self, name, unit, Nz, initial_value, advect = False, prognostic = False, output = False, **properties):
+   # {{{
+      ColumnVariable.__init__(self, name, unit, Nz, initial_value, prognostic, output)
+
+      self.advect = advect
+
+      if advect:
+         self.surface_flux = 0.
+         self.TOA_flux = 0.
+
+      self.properties = properties
+   # }}}
+
 class State():
    def __init__(self, columns, scalars, steps = 1):
    # {{{
@@ -272,6 +286,7 @@ class Column():
 
       self.__dict__['p_top'] = p_top
       p_bot = self.cfg.p0
+      self.__dict__['p_bot'] = p_bot
 
       z_top = -self.cfg.H * np.log(p_top / self.cfg.p0) 
       z_bot = 0.
@@ -285,7 +300,12 @@ class Column():
          zfull = -self.cfg.H * np.log(pfull / self.cfg.p0)
 
          self.__dict__['z_top'] = z_top
+         self.__dict__['z_bot'] = z_bot
          self.__dict__['dz'] = z_top / (self.Nz + 1)
+
+         # Reference grid for semi-lagrangian advection interpolation
+         #self.__dict__['zadv'] = np.concatenate([[z_bot], zfull[::-1], [z_top]])
+         self.__dict__['zadv'] = zfull[::-1]
       else:
          raise ValueError(f"Unrecognized grid spacing option: {spacing}")
 
@@ -294,9 +314,11 @@ class Column():
       self.initialize_var('phalf', 'Pa', self.Nz + 1, phalf, grid = True)
       self.initialize_var('pfull', 'Pa', self.Nz, pfull, grid = True)
 
+
       self.initialize_var('vmask', '1', Nz, 1., grid = True)
    # }}}
 
+### Methods related to dynamics/advection
    def initialize_dynamics(self, *, advected_tracers = ['T']):
    # {{{
       self.initialize_var('T', 'K', self.Nz, 300.) # Prognostic, advected
@@ -309,9 +331,201 @@ class Column():
       self.wp[0] = 0.
       self.wp[self.Nz] = 0.
 
+      # Conversion factor from temperature to potential temperature
+      exner = (self.pfull / self.cfg.p0)**(-self.cfg.Rd / self.cfg.cp)
+
+      self.initialize_var('Exner', '1', self.Nz, exner, grid = True)
+
       self.initialize_scalar('omega', 'd-1', 2 * np.pi / (86400. * 840.))
    # }}}
 
+   def get_courant(self, dt):
+   # {{{ 
+      dz = np.min(np.absolute(np.diff(self.zhalf)))
+      wmax = np.max(np.absolute(self.w) + np.absolute(self.wp))
+
+      return wmax * dt / dz
+   # }}}
+
+   def get_origins(self, state, j_now, j_new, dt, I = 2):
+   # {{{
+      dth = dt / 2.
+
+      dz = self.zhalf[1:] - self.zhalf[:-1]
+
+      # Destinations
+      r_dest = self.zfull
+
+      # Interpolate velocity at future time
+      wF = 0.5 * (state.w[j_new, 1:] + state.w[j_new, :-1])
+      aF = wF * (state.w[j_new, 1:] - state.w[j_new, :-1]) / dz
+
+      # Future half of trajectory
+      c2 = dth * wF - 0.5 * dth**2 * aF
+
+      # First guess at origin points
+      r_half = r_dest - c2
+      zorg = r_half
+
+      # Iterate estimate of past half of trajectory
+      for i in range(I):
+         # Interpolate velocity and acceleration to origin points
+         aS = 0.5 * (state.w[j_now, 1:] + state.w[j_now, :-1]) * (state.w[j_now, 1:] - state.w[j_now, :-1]) / dz
+         wS = np.interp(zorg[::-1], self.zhalf[::-1], state.w[j_now, ::-1])[::-1]
+         aS = np.interp(zorg[::-1], self.zfull[::-1], aS[::-1])[::-1]
+
+         # Past half of trajectory
+         c1 = dth * wS + 0.5 * dth**2 * aS
+         zorg = r_half - c1
+      
+      return zorg
+   # }}}
+
+   def build_advection_matrix(self, z_org):
+   # {{{
+      ''' Constructs matrices to build weights for advection interpolation. 
+       Returns a tuple of three matrices, C, D, and Del; the weights for shape-preserving
+       interpolation require a further diagonal matrix T to eliminate overshoot and can
+       be calculated as C + D @ T @ Del.'''
+
+      ip = self.zadv.searchsorted(z_org)
+      iL = np.where(ip == 0.)[0]
+      iR = np.where(ip == len(self.zadv))[0]
+
+      ip[iL] = 1
+      ip[iR] = len(self.zadv) - 1
+
+      i0 = ip - 1
+
+      dx = self.zadv[ip] - self.zadv[i0]
+      tn = (z_org - self.zadv[i0]) / dx
+      tn[iL] = 0.
+      tn[iR] = 1.
+
+      otn = 1 - tn
+
+      N = len(z_org)
+      M = len(self.zadv)
+
+      Dl = np.zeros(M - 1)
+      Dc = np.zeros(M)
+      Dr = np.zeros(M - 1)
+
+      Dx = np.diff(self.zadv)
+
+      Dr[1:  ] =  1 / (2 * Dx[:-1])
+      Dc[1:-1] = (Dx[1:] - Dx[:-1]) / (2 * Dx[1:] * Dx[:-1])
+      Dl[ :-1] = -1 / (2 * Dx[1:])
+
+      Del = sparse.diags_array([Dl, Dc, Dr], offsets = [-1, 0, 1], shape = (M,M), format = 'csr')
+
+      order = 2
+      Cdata = np.zeros(N * order, 'd')
+      Ddata = np.zeros(N * order, 'd')
+      indptr = order * np.arange(N + 1)
+      cols = np.zeros(N * order, 'i')
+      cols[::order]  = i0
+      cols[1::order] = ip
+
+      Cdata[::order] = otn**3 + 3*otn**2*tn
+      Cdata[1::order] = tn**3 + 3*tn**2*otn
+
+      Ddata[::order] = dx*otn**2*tn
+      Ddata[1::order] = -dx*tn**2*otn
+
+      C = sparse.csr_array((Cdata, cols, indptr), shape = (N, M))
+      D = sparse.csr_array((Ddata, cols, indptr), shape = (N, M))
+
+      return C, D, Del
+   # }}}
+
+   def advect_quantity(self, C, D, Del, X):
+   # {{{
+      ''' Carry out advection of a given field X, given the components
+      of the weights matrix C, D, and Del from build_advection_matrix().
+      Calculates shape-preserving modifications for this field, applies
+      normalization and boundary conditions. The array X is oriented in increasing
+      height.'''
+
+      # Compute shape-preserving modifications
+      T = np.ones(self.Nz)
+
+      def fmt(a): return ' '.join([f'{d:5.1f}' for d in a])
+
+      # One-sided estimates at every grid point
+      d0 = (X[1:] - X[:-1]) / (self.zadv[1:] - self.zadv[:-1])
+
+      # Initial derivatives for the interpolation splines
+      m = np.zeros(self.Nz)
+      m[1:-1] = 0.5 * (d0[1:] + d0[:-1])
+      m[0] = d0[0]
+      m[-1] = d0[-1]
+
+      #print('d: ' + fmt(d0*1e3))
+      #print('m: ' + fmt(m*1e3))
+
+      # Find indices of local extrema, and indices of complement.
+      # Adjacent indices are tested for overshoot, so last element is omitted in latter.
+      ext = (d0[1:] * d0[:-1] <= 0.)
+      exti = np.where(ext)[0] + 1
+      extn = np.concatenate([[0], np.where(~ext)[0] + 1])
+
+      # Set slope at any extrema to zero
+      m[exti] = 0
+      T[exti] = 0.
+
+      # Where the quantity tau < 1, we need to rescale the slopes
+      #anz = m[extn] / d0[extn]
+      #bnz = m[extn + 1] / d0[extn]
+      #tau = 3 / np.sqrt(anz**2 + bnz**2)
+      #tau = 3 * np.abs(d0[extn]) / np.sqrt(m[extn]**2 + m[extn + 1]**2 + 1e-16)
+      tau = 3 * np.abs(d0) / np.sqrt(m[:-1]**2 + m[1:]**2 + 1e-16)
+      #print('tau: ' + fmt(tau))
+
+      nmt = np.where(tau < 1)[0]
+      #m[extn[nmt]]     *= tau[nmt]
+      #m[extn[nmt] + 1] *= tau[nmt]
+      #T[extn[nmt]]     *= tau[nmt]
+      #T[extn[nmt] + 1] *= tau[nmt]
+      T[nmt]     *= tau[nmt]
+      T[nmt + 1] *= tau[nmt]
+
+      #print('z  : ' + fmt(self.zadv*1e-4))
+      #print('X  : ' + fmt(X))
+      #print('m  : ' + fmt(m*1e4))
+      #print('T  : ' + fmt(T))
+
+      # Calculate Weights
+      T = sparse.diags_array([T], offsets = [0], shape = (self.Nz,self.Nz), format = 'csr')
+
+      #print(D @ Del)
+      #print(D @ T @ Del)
+      L = (C + D @ T @ Del)
+      #L = (C + D @ Del)
+
+      # Normalize weights
+      #N = L.sum(0).reshape(-1, 1)
+      #L = L / N
+
+      # Apply interpolation
+      return L @ X
+   # }}}
+
+   def step_advection(self, state, z_org, j_now, j_new, dt):
+   # {{{
+      C, D, Del = self.build_advection_matrix(z_org[::-1])
+
+      # Convert temperature to potential temperature
+      #Theta = state.T[j_now, :] * self.Exner
+
+      # Advect potential temperature then convert back to temperature
+      #state.T[j_new, :] = (L @ Theta[::-1])[::-1] / self.Exner
+
+      state.H2O[j_new, :] = self.advect_quantity(C, D, Del, state.H2O[j_now, ::-1])[::-1]
+      #state.O3 [j_new, :] = self.advect_quantity(C, D, Del, state.O3[j_now, ::-1])[::-1]
+   # }}}
+
+### Methods related to radiative transfer
    def initialize_radiation(self, *, scon = 1368.22, **kwargs):
    # {{{
       self.__dict__['scon'] = scon
@@ -334,37 +548,6 @@ class Column():
       rrtmg.init(self.cfg.cp)
 
       self.initialize_var('dyn_hr', 'K d-1', self.Nz, 0.)
-   # }}}
-
-   def initialize_chemistry(self, *, mechanism):
-   # {{{  
-      parser = mc.Parser()
-
-      mechanism_file = self.cfg.config_path + mechanism + '.json'
-
-      self.__dict__['mechanism'] = parser.parse(mechanism_file)
-
-      for sp in self.mechanism.species:
-         self.initialize_var(sp.name, 'vmr', self.Nz, 0.)
-   # }}}
-
-   def get_internal_state(self, n = 1):
-   # {{{
-      return State(self.variables, self.scalars, n)
-   # }}}
-
-   def create_output_state(self, n = 1):
-   # {{{
-      return State(self.variables | self.output_variables, self.scalars, n)
-   # }}}
-
-   def save_state(self, state, output, i_state, i_out):
-   # {{{
-      for c in state.columns: 
-         output.columns[c][i_out, :] = state.columns[c][i_state, :]
-
-      for s in state.scalars: 
-         output.scalars[s][i_out] = state.scalars[s][i_state]
    # }}}
 
    def compute_radiation(self, state, output, i_state, i_out):
@@ -421,38 +604,77 @@ class Column():
       #output.sw_hr           = np.clip(output.ls_hr, -cl, cl)
    # }}}
 
-   def get_origins(self, state, j_now, j_new, dt, I = 2):
-   # {{{
-      dth = dt / 2.
+### Methods related to chemistry
+   def initialize_chemistry(self, *, mechanism):
+   # {{{  
+      parser = mc.Parser()
 
-      dz = self.zhalf[1:] - self.zhalf[:-1]
+      mechanism_file = self.cfg.config_path + mechanism + '.json'
 
-      # Destinations
-      r_dest = self.zfull
+      self.__dict__['mechanism'] = parser.parse(mechanism_file)
+      self.__dict__['MICMsolver'] = musica.MICM(mechanism = self.mechanism, solver_type = musica.SolverType.rosenbrock_standard_order)
+      self.__dict__['MICMstate'] = self.MICMsolver.create_state(200)
 
-      # Interpolate velocity at future time
-      wF = 0.5 * (state.w[j_new, 1:] + state.w[j_new, :-1])
-      aF = wF * (state.w[j_new, 1:] - state.w[j_new, :-1]) / dz
+      for sp in self.mechanism.species:
+         self.initialize_species(sp)
+   # }}}
 
-      # Future half of trajectory
-      c2 = dth * wF - 0.5 * dth**2 * aF
+   def initialize_species(self, species):
+   # {{{ 
+      properties = {'molecular_weight': species.molecular_weight_kg_mol}
+      properties.update(species.other_properties)
 
-      # First guess at origin points
-      r_half = r_dest - c2
-      zorg = r_half
+      name = species.name
+      advect = properties.pop('__do advect', False)
+      if advect == 'true': advect = True
+      else: advect = False
 
-      # Iterate estimate of past half of trajectory
-      for i in range(I):
-         # Interpolate velocity and acceleration to origin points
-         aS = 0.5 * (state.w[j_now, 1:] + state.w[j_now, :-1]) * (state.w[j_now, 1:] - state.w[j_now, :-1]) / dz
-         wS = np.interp(zorg[::-1], self.zhalf[::-1], state.w[j_now, ::-1])[::-1]
-         aS = np.interp(zorg[::-1], self.zfull[::-1], aS[::-1])[::-1]
-
-         # Past half of trajectory
-         c1 = dth * wS + 0.5 * dth**2 * aS
-         zorg = r_half - c1
+      if name in self.variables:
+         raise ValueError(f'{name} has already been initialized.')
       
-      return zorg
+      self.variables[name] = SpeciesVariable(name, 'vmr', self.Nz, 0., advect, **properties)
+   # }}}
+
+   def step_chemistry(self, state, z_org, j_new, dt):
+   # {{{
+      # Update MICM state object with temperatures and pressures
+      p_org = self.cfg.p0 * np.exp(-z_org / self.cfg.H)
+      self.MICMstate.set_conditions(state.T[j_new, :], p_org)
+
+      # For now update the concentrations manually
+      # This will be more efficient if we structure the column
+      # state vector to have a compatible memory structure
+      st = self.MICMstate._State__states[0].concentration_strides()[0]
+      sp = self.MICMstate.get_species_ordering()
+      for s, i in sp.items():
+         v = musica._musica.VectorDouble(state.columns[s][j_new, :])
+         self.MICMstate._State__states[0].concentrations[i::st] = v
+
+      self.MICMsolver.solve(self.MICMstate, dt)
+
+      # Read out resulting concentrations
+      for s, i in sp.items():
+         state.columns[s][j_new, :] = self.MICMstate._State__states[0].concentrations[i::st]
+   # }}}
+
+### Methods related to solver
+   def get_internal_state(self, n = 1):
+   # {{{
+      return State(self.variables, self.scalars, n)
+   # }}}
+
+   def create_output_state(self, n = 1):
+   # {{{
+      return State(self.variables | self.output_variables, self.scalars, n)
+   # }}}
+
+   def save_state(self, state, output, j_state, i_out):
+   # {{{
+      for c in state.columns: 
+         output.columns[c][i_out, :] = state.columns[c][j_state, :]
+
+      for s in state.scalars: 
+         output.scalars[s][i_out] = state.scalars[s][j_state]
    # }}}
 
    def update_externals(self, state, j, t):
@@ -475,67 +697,30 @@ class Column():
 
       i_out += 1
 
-      # Advective coefficients
-      dz = self.zhalf[1:] - self.zhalf[:-1]
-      #Cp = -1 / (2 * self.cfg.H * (np.exp(dz / self.cfg.H) - 1))
-      #Cm = -1 / (2 * self.cfg.H * (1 - np.exp(-dz / self.cfg.H)))
+      j_old, j_now = 0, 1
+      #j_old, j_now, j_new = 0, 1, 2
 
-      #Cp = -1 / (2 * dz)
-      #Cm = -1 / (2 * dz)
-
-      #print(Cp[0], Cm[0])
-
-      print('courant: %.3g' % (np.max(self.w + np.absolute(self.wp)) * dt / dz[5]))
-
-      #def build_advection_matrix(w, i):
-         #if i == -1: 
-            #print(-w[ :-2] * Cm[:-1],
-                   #w[ :-1] * Cm - w[1:] * Cp,
-                   #w[2:  ] * Cp[1:])
-         #return sparse.diags([-w[ :-2] * Cm[:-1],
-                               #w[ :-1] * Cm - w[1:] * Cp,
-                               #w[2:  ] * Cp[1:]],
-                             #[-1, 0, 1], shape = (self.Nz, self.Nz), format = 'csr')
-
-      #dAdv = np.ones(self.Nz, 'd')
-
-      #r = 0.0
-      j_old, j_now, j_new = 0, 1, 2
-
-      self.update_externals(s0, j_old, -1 * dt)
-      self.update_externals(s0, j_now, 0.)
+      self.update_externals(s0, j_old, 0.)
 
       #self.compute_radiation(s0, o0, 0, i_out)
-      self.save_state(s0, o0, 0, i_out)
+      self.save_state(s0, o0, j_old, i_out)
 
       for i in range(nsteps):
+         # Update externally varying parameters
+         self.update_externals(s0, j_now, (i + 1) * dt)
+
+         # Compute Lagragian origin points
+         z_org = self.get_origins(s0, j_old, j_now, dt)
+
+         # Advect species
+         self.step_advection(s0, z_org, j_old, j_now, dt)
+
+         # Run chemistry for the time step
+         self.step_chemistry(s0, z_org, j_now, dt)
+
          # Diabatic tendencies
          #self.compute_radiation(s0, o0, 0, i_out)
          #dQ = o0.lw_hr[i_out, :] + o0.sw_hr[i_out, :] + self.dyn_hr[:]
-
-         # Construct CSR sparse matrix for calculating advective tendencies
-         #LAdv = build_advection_matrix(s0.w[0, :], i)
-
-         # Matrix multiplication
-         #dAdv[:] = LAdv @ s0.H2O[j_now, :]
-
-         #s0.T[0, :] += dQ * dt * self.vmask[:]
-
-         #if i < 0: 
-            # First step copy
-            #s0.H2O[j_now, :] = s0.H2O[j_old, :] + dAdv * dt * 86400.
-         #else:
-            # Afterwards leapfrog step 
-            #s0.H2O[j_new, :] = s0.H2O[j_old, :] + 2 * dAdv * dt * 86400.
-
-            #print(s0.H2O[0, 53])
-            #s0.H2O[j_now, :] = (1-2*r)*s0.H2O[j_now, :] + r*(s0.H2O[j_new, :] + s0.H2O[j_old, :])
-
-         self.update_externals(s0, j_new, (i + 1) * dt)
-
-         zorg = self.get_origins(s0, j_now, j_new, dt)
-         L = interpolate_matrix(zorg[::-1], self.zfull[::-1], method='cubic')
-         s0.H2O[j_now, :] = (L @ s0.H2O[j_old][::-1])[::-1]
 
          i_step += 1
 
@@ -544,7 +729,8 @@ class Column():
             i_out += 1
             i_step = 0
 
-         j_old, j_now, j_new = j_now, j_new, j_old
+         #j_old, j_now, j_new = j_now, j_new, j_old
+         j_old, j_now = j_now, j_old
 
       return times, o0
    # }}}
