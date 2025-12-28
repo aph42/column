@@ -68,36 +68,43 @@ weights to be (potentially) different for each advected quantity, so this might
 get slow particularly with more advected species. It might ultimately be worth
 implementing this all in a Cython module for efficiency.
 
-There is a test for the advection scheme in `col_tests.py` that initializes a
-local patch of tracer concentration then advects it up and down periodically.
-With the current shape-preserving scheme one can get to very high Courant
-numbers (~10 at least) and maintains stability.  However, the mass conservation
-is currently turned off as it is introducing instability, and there are
-boundary effects that can arise which I think have to do with the normalization
-of the weights around the upper and lower boundaries of the domain. 
+There is a test for the advection scheme in [col_test.py](col_test.py) that
+initializes a local patch of tracer concentration then advects it up and down
+periodically.  With the current shape-preserving scheme one can get to very
+high Courant numbers (~10 at least) and maintains stability.  However, the mass
+conservation is currently turned off as it is introducing instability, and
+there are boundary effects that can arise which I think have to do with the
+normalization of the weights around the upper and lower boundaries of the
+domain. 
 
 I think this will be mitigated by working out how to deal with fluxes
 at the boundaries in this framework.
 
 #### To Do:
-    -Work out fluxes at boundaries, and a better normalization scheme
-    -Implement arbitrary list of advected species
-    -Implement potential temperature advection
-    -Add advection test with divergent flow
+ - [ ] Work out fluxes at boundaries, and a better normalization scheme
+ - [ ] Implement arbitrary list of advected species
+ - [ ] Implement potential temperature advection
+ - [ ] Add advection test with divergent flow
 
 ### Chemistry
+The MUSICA mechanism solver is now being called interactively; each timestep it
+is initialized with tracer values at the Lagrangian origin points for each grid
+point and uses temperatures and pressures at the mid-way point between the
+source and destination point. We'll have to see if this works ok.
 
 #### To Do:
-    -Try to write a mechanism that implements a simple decay rate?
-    -Work out a good operator splitting scheme to call MUSICA solver
+ - [x] Write a mechanism that implements a simple decay rate?
+ - [x] Work out an operator splitting scheme to call MUSICA solver
+ - [ ] Implement 
 
 ### Photolysis Rates
 
 #### To Do:
-    -Work out how to call TUVx and have it integrate with MUSICA
+ - [ ] Work out how to call TUVx and have it integrate with MUSICA
 
 ### Radiative Heating
 
 #### To Do:
-    -Work out a good operator splitting scheme to call RRTM
-    -Revisit unit conversion
+ - [ ] Work out a good operator splitting scheme to call RRTM
+ - [ ] Revisit unit conversion
+ - [ ] Incorporate wrapper and build configuration so that RRTM source code can be linked.
