@@ -394,3 +394,69 @@ def test_reaction():
 
    return ds
 # }}} 
+
+def test_radiation_profile():
+# {{{
+   dsr = pyg.open('/data/RO/sample_rrtm_profile.nc')
+
+   c = column.Configuration('mcm_test.json', 'configs/')
+   c.grid['spacing'] = 'specified_pressure'
+   c.grid['Nz'] = len(dsr.phalf)
+   c.grid['ptop'] = dsr.phalf[0]
+   c.grid['phalf'] = dsr.phalf[:]
+   c.grid['pfull'] = dsr.pfull[:]
+
+   col = column.Column(c)
+
+   col.T[:] = dsr.tf[:]
+   col.CO2[:] = dsr.co2[:]
+   col.O3[:] = dsr.o3[:]
+   col.H2O[:] = dsr.h2o[:]
+
+   col.Tsfc = dsr.tsfc[()]
+   col.Emissivity = dsr.emis[()]
+   col.Albedo = dsr.alb[()]
+   col.cosz = dsr.cosz[()]
+   #col.Latitude = dsr.lat[()]
+   #col.Declination = 4.631605247595053
+
+   s0 = col.get_internal_state()
+   o0 = col.create_output_state()
+   col.compute_radiation(s0, o0, 0, 0)
+
+   swhr = pyg.Var((dsr.pfull,), name = 'swhr_col', values = o0.sw_hr[0, :])
+   lwhr = pyg.Var((dsr.pfull,), name = 'lwhr_col', values = o0.lw_hr[0, :])
+
+   sw_dflx = pyg.Var((dsr.phalf,), name = 'sw_dflx', values = o0.sw_dflx[0, :])
+   sw_uflx = pyg.Var((dsr.phalf,), name = 'sw_uflx', values = o0.sw_uflx[0, :])
+
+   pyg.showlines([swhr, lwhr, dsr.swhr, dsr.lwhr], 
+          fmts = ['C0', 'C1', 'k--', 'k--'], size = (3.1, 4.2), fig=4)
+
+   pyg.showlines([sw_dflx, sw_uflx, dsr.dflxsw, dsr.uflxsw], 
+          fmts = ['C0', 'C1', 'k--', 'k--'], size = (3.1, 4.2), fig=5)
+
+   return col, s0
+# }}}
+
+def test_chapman():
+# {{{
+   c = column.Configuration('chapman_rad.json', 'configs/')
+   col = column.Column(c)
+
+   dsr = pyg.open('/data/RO/sample_rrtm_profile.nc')
+
+   col.CO2[:] = 400e-6
+   col.O3[:] = 0.
+   col.O3[:] = np.interp(col.zfull[::-1], -col.cfg.H * np.log(dsr.pfull[::-1] / col.cfg.p0), dsr.o3[::-1])[::-1] 
+   col.H2O[:] = 0.
+   col.w[:] = 0.
+   col.wp[:] = 0.
+
+   ts, o0 = col.solve(1000, 3600.)
+
+   ds = column.to_pyg(col, ts, o0)
+
+   pyg.showvar(ds.T, fig=3)
+   return ds
+# }}}

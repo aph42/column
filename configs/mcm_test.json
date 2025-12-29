@@ -11,7 +11,7 @@
   },
   "grid": {
       "Nz"       :  200,
-      "spacing"  : "log_pres_equal",
+      "spacing"  : "log_pressure_equal",
       "p_top"    :    2.0
   },
   "radiation": {

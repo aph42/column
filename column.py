@@ -279,41 +279,62 @@ class Column():
       self.scalars[name] = ScalarVariable(name, unit, initial_value)
    # }}}
 
-   def initialize_grid(self, *, Nz = 200, spacing = 'log_pres_equal', p_top = 0.1):
+   def initialize_grid(self, *, spacing = 'log_pressure_equal', Nz = 200, p_top = 0.1, **kwargs):
    # {{{
-      # Grid parameters
-      self.__dict__['Nz'] = Nz
-
-      self.__dict__['p_top'] = p_top
-      p_bot = self.cfg.p0
-      self.__dict__['p_bot'] = p_bot
-
-      z_top = -self.cfg.H * np.log(p_top / self.cfg.p0) 
-      z_bot = 0.
-      Lz = z_top - z_bot
+      ''' Initialize the column grid. The levels must run from the top of the atmosphere down
+      (increasing pressure). The grid spacing can be set in various ways based on the choice
+      of the argument `spacing`. Possible values include
+       - 'log_pressure_equal' (default). Specify p_top, the pressure at the top of the domain in hPa, and
+            the number of levels.
+       - 'specified_pressure'. Provide arrays for phalf and pfull. '''
 
       # Grid must run from the top of the atmosphere down for RRTMG to work
-      if spacing == 'log_pres_equal':
-         zhalf = np.linspace(z_top, z_bot, self.Nz + 1)
+      if spacing == 'log_pressure_equal':
+         p_bot = self.cfg.p0
+
+         z_top = -self.cfg.H * np.log(p_top / self.cfg.p0) 
+         z_bot = 0.
+         Lz = z_top - z_bot
+
+         zhalf = np.linspace(z_top, z_bot, Nz + 1)
          phalf = self.cfg.p0 * np.exp(-zhalf / self.cfg.H)
          pfull = np.sqrt(phalf[:-1]*phalf[1:])
          zfull = -self.cfg.H * np.log(pfull / self.cfg.p0)
 
-         self.__dict__['z_top'] = z_top
-         self.__dict__['z_bot'] = z_bot
-         self.__dict__['dz'] = z_top / (self.Nz + 1)
+         #self.__dict__['dz'] = z_top / (self.Nz + 1)
 
-         # Reference grid for semi-lagrangian advection interpolation
-         #self.__dict__['zadv'] = np.concatenate([[z_bot], zfull[::-1], [z_top]])
-         self.__dict__['zadv'] = zfull[::-1]
+      elif spacing == 'specified_pressure':
+         # Full and half-levels must be specified
+         pfull = kwargs.pop('pfull')
+         phalf = kwargs.pop('phalf')
+         zfull = -self.cfg.H * np.log(pfull / self.cfg.p0)
+         zhalf = -self.cfg.H * np.log(phalf / self.cfg.p0)
+
+         if len(phalf) != len(pfull) + 1:
+            raise ValueError('There must be one more half level (phalf) than full levels (pfull)')
+
+         Nz = len(pfull)
+         p_top = phalf[0]
+         p_bot = phalf[-1]
+         z_top = zhalf[0]
+         z_bot = zhalf[-1]
       else:
          raise ValueError(f"Unrecognized grid spacing option: {spacing}")
+
+      if p_top > p_bot:
+         raise ValueError("Pressure levels must be increasing (from top of the atmosphere down).")
+
+      # Grid parameters
+      self.__dict__['Nz'] = Nz
+      self.__dict__['p_top'] = p_top
+      self.__dict__['p_bot'] = p_bot
+      self.__dict__['z_top'] = z_top
+      self.__dict__['z_bot'] = z_bot
 
       self.initialize_var('zhalf', 'm', self.Nz + 1, zhalf, grid = True)
       self.initialize_var('zfull', 'm', self.Nz, zfull, grid = True)
       self.initialize_var('phalf', 'Pa', self.Nz + 1, phalf, grid = True)
       self.initialize_var('pfull', 'Pa', self.Nz, pfull, grid = True)
-
 
       self.initialize_var('vmask', '1', Nz, 1., grid = True)
    # }}}
@@ -337,6 +358,10 @@ class Column():
       self.initialize_var('Exner', '1', self.Nz, exner, grid = True)
 
       self.initialize_scalar('omega', 'd-1', 2 * np.pi / (86400. * 840.))
+
+      # Reference grid for semi-lagrangian advection interpolation
+      #self.__dict__['zadv'] = np.concatenate([[z_bot], zfull[::-1], [z_top]])
+      self.__dict__['zadv'] = self.zfull[::-1]
    # }}}
 
    def get_courant(self, dt):
@@ -594,7 +619,7 @@ class Column():
       output.lw_hr[i_out, :]   = lw['lwhr'][0, :]
 
       #sw = rrtmg.rrtmg_sw_dm(pfull, phalf, \
-            #T, TSfc,  c.scon, 4, \
+            #T, TSfc,  self.scon, 4, \
             #alb, lat, dec, \
             #CO2, H2O, O3)
 
@@ -733,8 +758,9 @@ class Column():
          self.step_chemistry(s0, z_org, j_now, dt)
 
          # Diabatic tendencies
-         #self.compute_radiation(s0, o0, 0, i_out)
-         #dQ = o0.lw_hr[i_out, :] + o0.sw_hr[i_out, :] + self.dyn_hr[:]
+         self.compute_radiation(s0, o0, j_now, i_out)
+         dQ = o0.lw_hr[i_out, :] + o0.sw_hr[i_out, :] + self.dyn_hr[:]
+         s0.T[j_now] += dt * dQ / 86400.
 
          i_step += 1
 
