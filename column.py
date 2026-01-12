@@ -678,7 +678,7 @@ class Column():
    # {{{
       # Update MICM state object with temperatures and pressures
       p_org = self.cfg.p0 * np.exp(-z_org / self.cfg.H)
-      self.MICMstate.set_conditions(state.T[j_new, :], p_org)
+      self.MICMstate.set_conditions(state.T[j_new, :], 100.*p_org)
 
       # For now update the concentrations manually
       # This will be more efficient if we structure the column
@@ -686,6 +686,7 @@ class Column():
       st = self.MICMstate._State__states[0].concentration_strides()[0]
       sp = self.MICMstate.get_species_ordering()
       for s, i in sp.items():
+         # TODO: Check units - these may need to be in mol/m^3 not vmr
          v = musica._musica.VectorDouble(state.columns[s][j_new, :])
          self.MICMstate._State__states[0].concentrations[i::st] = v
 

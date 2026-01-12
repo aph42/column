@@ -447,16 +447,21 @@ def test_chapman():
    dsr = pyg.open('/data/RO/sample_rrtm_profile.nc')
 
    col.CO2[:] = 400e-6
-   col.O3[:] = 0.
+   col.O2[:] = 0.75
+   col.O1D[:] = 1e-6
+   col.O[:] = 1e-9
    col.O3[:] = np.interp(col.zfull[::-1], -col.cfg.H * np.log(dsr.pfull[::-1] / col.cfg.p0), dsr.o3[::-1])[::-1] 
    col.H2O[:] = 0.
-   col.w[:] = 0.
+   col.w[:] = 0.001
    col.wp[:] = 0.
+   col.MICMstate.set_user_defined_rate_parameters({'PHOTO.jO2': 2.42e-17 + 0 * col.zfull})
+   col.MICMstate.set_user_defined_rate_parameters({'PHOTO.jO3->O': 1.15e-5 + 0 * col.zfull})
+   col.MICMstate.set_user_defined_rate_parameters({'PHOTO.jO3->O1D': 6.61e-9 + 0 * col.zfull})
 
    ts, o0 = col.solve(1000, 3600.)
 
    ds = column.to_pyg(col, ts, o0)
 
-   pyg.showvar(ds.T, fig=3)
+   #pyg.showvar(ds.T, fig=3)
    return ds
 # }}}
