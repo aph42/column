@@ -15,18 +15,15 @@
       "p_top"    :    2.0
   },
   "radiation": {
+      "active" : false,
       "scon" :  1368.22,
       "date" :  "2000-03-01T00:00",
       "lat"  :  22.3
   },
   "chemistry": {
-     "mechanism" : "chapman"
+      "active" : false,
+      "mechanism" : "chapman"
   },
   "dynamics": {
-     "advected_tracers": [
-         "T",
-         "O3",
-         "H2O"
-     ]
   }
 }

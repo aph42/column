@@ -312,6 +312,7 @@ def test_advection_step(C = 0.2, Nz = 11, w0 = 0.02):
 def test_reaction():
 # {{{
    c = column.Configuration('mcm_test.json', 'configs/')
+   c.radiation['active'] = False
    col = column.Column(c)
 
    tau_o3 = 1. * 86400. # 10 day decay time

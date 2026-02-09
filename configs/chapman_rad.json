@@ -23,10 +23,5 @@
      "mechanism" : "chapman"
   },
   "dynamics": {
-     "advected_tracers": [
-         "T",
-         "O3",
-         "O1D"
-     ]
   }
 }

@@ -340,8 +340,10 @@ class Column():
    # }}}
 
 ### Methods related to dynamics/advection
-   def initialize_dynamics(self, *, advected_tracers = ['T']):
+   def initialize_dynamics(self, *, active = True):
    # {{{
+      self.__dict__['do_dynamics'] = active
+
       self.initialize_var('T', 'K', self.Nz, 300.) # Prognostic, advected
 
       self.initialize_var('w', 'm s-1', self.Nz + 1, 0.02) # not prognostic
@@ -559,9 +561,10 @@ class Column():
    # }}}
 
 ### Methods related to radiative transfer
-   def initialize_radiation(self, *, scon = 1368.22, **kwargs):
+   def initialize_radiation(self, *, scon = 1368.22, active = True, **kwargs):
    # {{{
       self.__dict__['scon'] = scon
+      self.__dict__['do_radiation'] = active
 
       self.initialize_scalar('Tsfc', 'K', 300.)
       self.initialize_scalar('Emissivity', '1', 0.99)
@@ -638,15 +641,17 @@ class Column():
    # }}}
 
 ### Methods related to chemistry
-   def initialize_chemistry(self, *, mechanism):
+   def initialize_chemistry(self, *, mechanism, active = True, **kwargs):
    # {{{  
+      self.__dict__['do_chemistry'] = active
+
       parser = mc.Parser()
 
       mechanism_file = self.cfg.config_path + mechanism + '.json'
 
       self.__dict__['mechanism'] = parser.parse(mechanism_file)
       self.__dict__['MICMsolver'] = musica.MICM(mechanism = self.mechanism, solver_type = musica.SolverType.rosenbrock_standard_order)
-      self.__dict__['MICMstate'] = self.MICMsolver.create_state(200)
+      self.__dict__['MICMstate'] = self.MICMsolver.create_state(self.Nz)
 
       species_list = []
       advected_list = []
@@ -683,18 +688,19 @@ class Column():
       # For now update the concentrations manually
       # This will be more efficient if we structure the column
       # state vector to have a compatible memory structure
-      st = self.MICMstate._State__states[0].concentration_strides()[0]
+      mstate = self.MICMstate.get_internal_state()
+      stride = mstate.concentration_strides()[0]
       sp = self.MICMstate.get_species_ordering()
       for s, i in sp.items():
          # TODO: Check units - these may need to be in mol/m^3 not vmr
          v = musica._musica.VectorDouble(state.columns[s][j_new, :])
-         self.MICMstate._State__states[0].concentrations[i::st] = v
+         mstate.concentrations[i::stride] = v
 
       self.MICMsolver.solve(self.MICMstate, dt)
 
       # Read out resulting concentrations
       for s, i in sp.items():
-         state.columns[s][j_new, :] = self.MICMstate._State__states[0].concentrations[i::st]
+         state.columns[s][j_new, :] = mstate.concentrations[i::stride]
    # }}}
 
 ### Methods related to solver
@@ -756,12 +762,14 @@ class Column():
          self.step_advection(s0, z_org, j_old, j_now, dt)
 
          # Run chemistry for the time step
-         self.step_chemistry(s0, z_org, j_now, dt)
+         if self.do_chemistry:
+            self.step_chemistry(s0, z_org, j_now, dt)
 
          # Diabatic tendencies
-         self.compute_radiation(s0, o0, j_now, i_out)
-         dQ = o0.lw_hr[i_out, :] + o0.sw_hr[i_out, :] + self.dyn_hr[:]
-         s0.T[j_now] += dt * dQ / 86400.
+         if self.do_radiation:
+            self.compute_radiation(s0, o0, j_now, i_out)
+            dQ = o0.lw_hr[i_out, :] + o0.sw_hr[i_out, :] + self.dyn_hr[:]
+            s0.T[j_now] += dt * dQ / 86400.
 
          i_step += 1
 
