@@ -465,3 +465,52 @@ def test_chapman():
    #pyg.showvar(ds.T, fig=3)
    return ds
 # }}}
+
+def compare_chapman_rates():
+# {{{
+   ''' Compares rate coefficients k2 and k3 of Chapman reactions
+       from TS1 and chapman MUSICA v1 configuration files as of 26 Jan 2026.'''
+
+   # Form of reaction rate temperature dependence
+   # Used by MUSICA (pressure dependent term is omitted)
+   def arr(T, A, B, C, D):
+      return A*np.exp(C / T) * (T / D)**B
+
+   def k2(T):
+      return arr(T, 7.9e37, -2.4, 0., 300.)
+   def k3(T):
+      return arr(T, 2.9e24, 0., -2060, 300)
+
+   def k2_c(T):
+      return arr(T, 2.9e19, 0., 0., 300.)
+   def k3_c(T):
+      return arr(T, 5.7e20, 0., 0., 300.)
+
+   # Avogadro constant
+   N_A = 6.022e23
+
+   T = np.linspace(190., 310, 1001)
+
+   fig = plt.figure(1)
+   fig.clf()
+
+   ax1 = fig.add_subplot(211)
+
+   ax1.semilogy(T, k2(T), label = r'TS1 k$_2$')
+   ax1.semilogy(T, N_A*k2_c(T)*1e-5, label = r'Chapman k$_2 \times N_A \times 10^{-5}$ ')
+
+   ax1.set_title(r'O + O$_2$ + M $\to$ O$_3$ + M')
+   ax1.set_xlabel('K')
+   ax1.legend(loc='best', frameon=False)
+
+   ax2 = fig.add_subplot(212)
+
+   ax2.semilogy(T, k3(T), label = r'TS1 k$_3$')
+   ax2.semilogy(T, k3_c(T), label = r'Chapman k$_3$')
+
+   ax2.set_title(r'O + O$_3$ $\to$ 2O$_2$')
+   ax2.legend(loc='best', frameon=False)
+   ax2.set_xlabel('K')
+
+   fig.tight_layout()
+# }}}
