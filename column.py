@@ -8,6 +8,10 @@ from rrtm import rrtmg
 import musica
 import musica.mechanism_configuration as mc
 
+from musica.utils import find_config_path
+
+from musica.tuvx.vTS1 import wavelength_grid, profile, radiator
+
 class Configuration():
    def __init__(self, config_file, config_path):
 # {{{
@@ -29,6 +33,7 @@ class Configuration():
       self.dynamics = d['dynamics']
       self.radiation = d['radiation']
       self.chemistry = d['chemistry']
+      self.photolysis = d['photolysis']       
 # }}}
 
 class ScalarVariable():
@@ -210,6 +215,10 @@ class Column():
 
       # Initialize radiation
       self.initialize_radiation(**self.cfg.radiation)
+
+      # Initialize photolysis 
+      self.initialize_photolysis(**self.cfg.photolysis)
+       
    # }}} 
 
    def __setattr__(self, name, value):
@@ -333,8 +342,8 @@ class Column():
 
       self.initialize_var('zhalf', 'm', self.Nz + 1, zhalf, grid = True)
       self.initialize_var('zfull', 'm', self.Nz, zfull, grid = True)
-      self.initialize_var('phalf', 'Pa', self.Nz + 1, phalf, grid = True)
-      self.initialize_var('pfull', 'Pa', self.Nz, pfull, grid = True)
+      self.initialize_var('phalf', 'Pa', self.Nz + 1, phalf, grid = True) 
+      self.initialize_var('pfull', 'Pa', self.Nz, pfull, grid = True) # DEBUG: pfull inherits units of cfg.p0 from json file, default hPa
 
       self.initialize_var('vmask', '1', Nz, 1., grid = True)
    # }}}
@@ -360,6 +369,10 @@ class Column():
       self.initialize_var('Exner', '1', self.Nz, exner, grid = True)
 
       self.initialize_scalar('omega', 'd-1', 2 * np.pi / (86400. * 840.))
+
+      R = 8.314 # J mol-1 K-1  # TO DO: set this variable correctly
+      self.initialize_var('nafull', 'mol m-3', self.Nz, self.pfull * 100/ (R * self.T[:]))
+      self.initialize_var('nahalf', 'mol m-3', self.Nz+1, self.phalf * 100/ (R * np.interp(self.phalf,self.pfull,self.T[:])))
 
       # Reference grid for semi-lagrangian advection interpolation
       #self.__dict__['zadv'] = np.concatenate([[z_bot], zfull[::-1], [z_top]])
@@ -564,7 +577,7 @@ class Column():
    def initialize_radiation(self, *, scon = 1368.22, active = True, **kwargs):
    # {{{
       self.__dict__['scon'] = scon
-      self.__dict__['do_radiation'] = active
+      self.__dict__['do_radiation'] = active       
 
       self.initialize_scalar('Tsfc', 'K', 300.)
       self.initialize_scalar('Emissivity', '1', 0.99)
@@ -644,7 +657,6 @@ class Column():
    def initialize_chemistry(self, *, mechanism, active = True, **kwargs):
    # {{{  
       self.__dict__['do_chemistry'] = active
-
       parser = mc.Parser()
 
       mechanism_file = self.cfg.config_path + mechanism + '.json'
@@ -692,16 +704,105 @@ class Column():
       stride = mstate.concentration_strides()[0]
       sp = self.MICMstate.get_species_ordering()
       for s, i in sp.items():
-         # TODO: Check units - these may need to be in mol/m^3 not vmr
-         v = musica._musica.VectorDouble(state.columns[s][j_new, :])
+          # convert from vmr to mol m-3
+         v = musica._musica.VectorDouble(state.columns[s][j_new, :]*self.nafull[:])
          mstate.concentrations[i::stride] = v
-
+         
       self.MICMsolver.solve(self.MICMstate, dt)
 
       # Read out resulting concentrations
       for s, i in sp.items():
-         state.columns[s][j_new, :] = mstate.concentrations[i::stride]
+          # convert back from mol m-3 to vmr
+         state.columns[s][j_new, :] = mstate.concentrations[i::stride] / self.nafull[:]
    # }}}
+
+   def initialize_photolysis(self, *, mechanism, active=True):
+      # tuv-x height coordinates are bottom up
+      self.__dict__['do_photolysis'] = active
+      self.__dict__['micm_to_tuvx'] = {'jO2':'jo2_b','jO3->O':'jo3_b','jO3->O1D':'jo3_a'}
+
+      for key in self.micm_to_tuvx:
+          self.add_output(self.micm_to_tuvx[key], 's-1', self.Nz) 
+       
+      # initialize photolysis 
+      mechanism_file = find_config_path() + '/tuvx/' + mechanism + '.json'
+
+      print(mechanism_file)
+       
+      # Set up grids
+      grids = musica.tuvx.GridMap()
+        
+      heights = musica.tuvx.grid.Grid(name="height", units="km", num_sections=self.Nz)
+      heights.edges = self.zhalf[::-1]/1000. 
+      heights.midpoints = self.zfull[::-1]/1000.
+      
+      grids["height", "km"] = heights
+      grids["wavelength", "nm"] = wavelength_grid()
+    
+      # Set up profiles
+      profiles = musica.tuvx.ProfileMap()
+      profiles["air", "molecule cm-3"] = profile("air", grids["height", "km"])
+      profiles["O3", "molecule cm-3"] = profile("O3", grids["height", "km"])
+      profiles["O2", "molecule cm-3"] = profile("O2", grids["height", "km"])
+      profiles["temperature", "K"] = profile("temperature", grids["height", "km"])
+      profiles["surface albedo", "none"] = profile("surface albedo", grids["wavelength", "nm"])
+      profiles["extraterrestrial flux", "photon cm-2 s-1"] = profile(
+            "extraterrestrial flux", grids["wavelength", "nm"]
+        )
+        
+      # Set up radiators
+      radiators = musica.tuvx.RadiatorMap() # Note: radiators automatically includes air, O2, and O3 without being specified
+      radiators["aerosol"] = radiator("aerosol", grids["height", "km"], grids["wavelength", "nm"])
+       
+      # Create TUV-x instance with v5.4 configuration file
+      self.__dict__['tuvx'] = musica.tuvx.TUVX(
+            grid_map=grids,
+            profile_map=profiles,
+            radiator_map=radiators,
+            config_path=mechanism_file,
+        )
+
+        
+   def update_photolysis(self, state, output, z_org, j_new, dt,i_out):
+      # update ozone and temperature, then calculate photolysis rates using TUV-x
+      # TUV-x height coordinates are bottom-up  
+    
+      # get the vertical profiles
+      grids = self.tuvx.get_grid_map()
+      profiles = self.tuvx.get_profile_map()
+      
+      Av = 6.022e23 # Avogadro's number, DEBUG: move this
+      
+      # update the ozone profile
+      o3_profile = profiles["O3", "molecule cm-3"]
+      o3_profile.midpoint_values = state.O3[j_new,::-1] * self.nafull[::-1] * Av * 1e-6 # molec cm-3
+      o3_profile.edge_values = np.interp(self.zhalf[::-1],self.zfull[::-1],state.O3[j_new,::-1]) * self.nahalf[::-1] * Av * 1e-6 # molec cm-3
+      o3_profile.calculate_layer_densities(grids["height", "km"]) # provide the height grid for layer thicknesses
+      
+      # update the temperature profile
+      T_profile = profiles["temperature", "K"]
+      T_profile.midpoint_values =  state.T[j_new,::-1] 
+      T_profile.edge_values = np.interp(self.zhalf[::-1],self.zfull[::-1],state.T[j_new,::-1]) 
+      
+      # calculate photolysis rates
+      sza = np.acos(self.cosz) # sza: Solar zenith angle in radians
+      tuvx_output = self.tuvx.run(sza=sza, earth_sun_distance=1.0)
+
+      # profiles = self.tuvx.get_profile_map()
+      # print(profiles['O3','molecule cm-3'].midpoint_values)
+       
+      self.update_micm_tuvx_photolysis(output,tuvx_output,i_out)
+        
+   def update_micm_tuvx_photolysis(self,output,tuvx_output,i_out):
+      
+      for micm_reaction in self.micm_to_tuvx.keys():
+          micm_key = 'PHOTO.{0}'.format(micm_reaction)
+          tuvx_key = self.micm_to_tuvx[micm_reaction]
+          jval = tuvx_output['photolysis_rate_constants'].sel(reaction=tuvx_key).interp(vertical_edge=self.zfull/1000.).values
+
+          getattr(output,tuvx_key)[i_out, :] = jval
+          self.MICMstate.set_user_defined_rate_parameters({micm_key:jval})
+
 
 ### Methods related to solver
    def get_internal_state(self, n = 1):
@@ -761,6 +862,10 @@ class Column():
          # Advect species
          self.step_advection(s0, z_org, j_old, j_now, dt)
 
+         if self.do_photolysis:
+             # Diagnose photolysis rates
+             self.update_photolysis(s0, o0, z_org, j_now, dt, i_out)
+              
          # Run chemistry for the time step
          if self.do_chemistry:
             self.step_chemistry(s0, z_org, j_now, dt)
