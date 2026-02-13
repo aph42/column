@@ -7,10 +7,7 @@ from rrtm import rrtmg
 
 import musica
 import musica.mechanism_configuration as mc
-
-from musica.utils import find_config_path
-
-from musica.tuvx.vTS1 import wavelength_grid, profile, radiator
+import musica.tuvx.vTS1
 
 class Configuration():
    def __init__(self, config_file, config_path):
@@ -725,7 +722,7 @@ class Column():
           self.add_output(self.micm_to_tuvx[key], 's-1', self.Nz) 
        
       # initialize photolysis 
-      mechanism_file = find_config_path() + '/tuvx/' + mechanism + '.json'
+      mechanism_file = musica.utils.find_config_path() + '/tuvx/' + mechanism + '.json'
 
       print(mechanism_file)
        
@@ -737,22 +734,22 @@ class Column():
       heights.midpoints = self.zfull[::-1]/1000.
       
       grids["height", "km"] = heights
-      grids["wavelength", "nm"] = wavelength_grid()
+      grids["wavelength", "nm"] = musica.tuvx.vTS1.wavelength_grid()
     
       # Set up profiles
       profiles = musica.tuvx.ProfileMap()
-      profiles["air", "molecule cm-3"] = profile("air", grids["height", "km"])
-      profiles["O3", "molecule cm-3"] = profile("O3", grids["height", "km"])
-      profiles["O2", "molecule cm-3"] = profile("O2", grids["height", "km"])
-      profiles["temperature", "K"] = profile("temperature", grids["height", "km"])
-      profiles["surface albedo", "none"] = profile("surface albedo", grids["wavelength", "nm"])
-      profiles["extraterrestrial flux", "photon cm-2 s-1"] = profile(
+      profiles["air", "molecule cm-3"] = musica.tuvx.vTS1.profile("air", grids["height", "km"])
+      profiles["O3", "molecule cm-3"] = musica.tuvx.vTS1.profile("O3", grids["height", "km"])
+      profiles["O2", "molecule cm-3"] = musica.tuvx.vTS1.profile("O2", grids["height", "km"])
+      profiles["temperature", "K"] = musica.tuvx.vTS1.profile("temperature", grids["height", "km"])
+      profiles["surface albedo", "none"] = musica.tuvx.vTS1.profile("surface albedo", grids["wavelength", "nm"])
+      profiles["extraterrestrial flux", "photon cm-2 s-1"] = musica.tuvx.vTS1.profile(
             "extraterrestrial flux", grids["wavelength", "nm"]
         )
         
       # Set up radiators
       radiators = musica.tuvx.RadiatorMap() # Note: radiators automatically includes air, O2, and O3 without being specified
-      radiators["aerosol"] = radiator("aerosol", grids["height", "km"], grids["wavelength", "nm"])
+      radiators["aerosol"] = musica.tuvx.vTS1.radiator("aerosol", grids["height", "km"], grids["wavelength", "nm"])
        
       # Create TUV-x instance with v5.4 configuration file
       self.__dict__['tuvx'] = musica.tuvx.TUVX(
