@@ -82,15 +82,24 @@
         {
           "species name": "O2",
           "coefficient": 1
+        },
+        {
+          "species name": "M",
+          "coefficient": 1
         }
       ],
       "products": [
         {
           "species name": "O3",
           "coefficient": 1
+        },
+        {
+          "species name": "M",
+          "coefficient": 1
         }
       ],
-      "A": 2.907822258940256e+19,
+      "A": 217.586904,
+      "B": -2.4,
       "name": "R2"
     },
     {
@@ -132,7 +141,8 @@
           "coefficient": 2.0
         }
       ],
-      "A": 5.715549862920732e+20,
+      "A": 4817600.0,
+      "C": -2060,
       "name": "R4"
     },
     {
@@ -178,7 +188,8 @@
           "coefficient": 1
         }
       ],
-      "A": 2.5785253505943154e+25,
+      "A": 10839600.0,
+      "C": 0,
       "name": "R6"
     },
     {
@@ -200,7 +211,9 @@
           "coefficient": 2.0
         }
       ],
-      "A": 4.351941519990405e+25,
+      "A": 72264000.0,
+      "C": 0,
+        
       "name": "R7"
     }
   ]

@@ -8,8 +8,10 @@ import pygeode as pyg
 
 import column
 
-import adiabat
+# import adiabat
 from rrtm import astr
+
+import xarray as xr
 
 def interpolate_matrix(x_new, x_old, method = 'linear'):
 # {{{
@@ -442,24 +444,39 @@ def test_radiation_profile():
 
 def test_chapman():
 # {{{
-   c = column.Configuration('chapman_rad.json', 'configs/')
+   c = column.Configuration('chapman_rad.json', 'column/configs/')
+   c.radiation['active'] = True
+   c.chemistry['active'] = True
+   c.photolysis['active'] = True
    col = column.Column(c)
 
-   dsr = pyg.open('/data/RO/sample_rrtm_profile.nc')
+   dsr = pyg.open('/local1/storage1/aph28/sample_rrtm_profile.nc')
 
+    # mixing ratio or mol/m-3?
    col.CO2[:] = 400e-6
-   col.O2[:] = 0.75
-   col.O1D[:] = 1e-6
-   col.O[:] = 1e-9
-   col.O3[:] = np.interp(col.zfull[::-1], -col.cfg.H * np.log(dsr.pfull[::-1] / col.cfg.p0), dsr.o3[::-1])[::-1] 
-   col.H2O[:] = 0.
+   col.O2[:] = 0.21
+   col.O1D[:] = 0
+   col.O[:] = 0
+   col.O3[:] = 0   # np.interp(col.zfull[::-1], -col.cfg.H * np.log(dsr.pfull[::-1] / col.cfg.p0), dsr.o3[::-1])[::-1] 
+   col.H2O[:] = 0.02 / 0.622 * np.exp(-col.zfull[:]/2000) # approximate profile with 2 km scale height
    col.w[:] = 0.001
-   col.wp[:] = 0.
-   col.MICMstate.set_user_defined_rate_parameters({'PHOTO.jO2': 2.42e-17 + 0 * col.zfull})
-   col.MICMstate.set_user_defined_rate_parameters({'PHOTO.jO3->O': 1.15e-5 + 0 * col.zfull})
-   col.MICMstate.set_user_defined_rate_parameters({'PHOTO.jO3->O1D': 6.61e-9 + 0 * col.zfull})
+   col.wp[:] =  0.
+   col.M[:] = 1.
 
-   ts, o0 = col.solve(1000, 3600.)
+   # dst = pyg.open('/local1/storage1/alm334/tuv-x/sample_photolysis_rate_constants.nc')(time=0)
+   # zt_in = dst.vertical_level.values*1e3 # meters
+    
+   # col.MICMstate.set_user_defined_rate_parameters({'PHOTO.jO2': np.interp(col.zfull,zt_in,dst.jo2_b[:][:,0])})
+   # col.MICMstate.set_user_defined_rate_parameters({'PHOTO.jO3->O': np.interp(col.zfull,zt_in,dst.jo3_b[:][:,0])})
+   # col.MICMstate.set_user_defined_rate_parameters({'PHOTO.jO3->O1D': np.interp(col.zfull,zt_in,dst.jo3_a[:][:,0])})
+
+   # col.MICMstate.set_user_defined_rate_parameters({'PHOTO.jO2': col.M[:]*0.+1e-11})
+   # col.MICMstate.set_user_defined_rate_parameters({'PHOTO.jO3->O': col.M[:]*0.+1e-3})
+   col.MICMstate.set_user_defined_rate_parameters({'PHOTO.jO2': col.M[:]*.0})
+   col.MICMstate.set_user_defined_rate_parameters({'PHOTO.jO3->O': col.M[:]*.0})
+   col.MICMstate.set_user_defined_rate_parameters({'PHOTO.jO3->O1D': col.M[:]*.0})
+
+   ts, o0 = col.solve(500, 3600)
 
    ds = column.to_pyg(col, ts, o0)
 

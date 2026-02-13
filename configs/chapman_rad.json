@@ -22,6 +22,9 @@
   "chemistry": {
      "mechanism" : "chapman"
   },
+  "photolysis": {
+      "mechanism" :"ts1_tsmlt"
+  },
   "dynamics": {
   }
 }
