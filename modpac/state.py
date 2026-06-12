@@ -273,10 +273,10 @@ class OutputState(State):
       rec_var = ds.createVariable("time", 'f8', ("time",))
       rec_var.setncattr("long_name", "time")
       rec_var.setncattr("standard_name", "time")
-      rec_var.setncattr("units", f"seconds since {self.initial_date}")
+      rec_var.setncattr("units", f"days since {self.initial_date}")
       rec_var.setncattr("calendar", f"365_day")
 
-      rec_var[:] = self.times
+      rec_var[:] = self.times / 86400.
 
       return rec_dim
    # }}}

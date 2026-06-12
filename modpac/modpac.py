@@ -29,7 +29,7 @@ class ModPAC():
       self.__dict__['name_template'] = name_template
       self.__dict__['output_path_template'] = output_path_template
       self.__dict__['output_file_template'] = '{outpath}/{runname}_{i0:05d}.nc'
-      self.__dict__['restart_file_template'] =  '{outpath}/{runname}_restart_{i1:05d}.nc'
+      self.__dict__['restart_file_template'] =  '{outpath}/{runname}_restart_{i1:010d}.nc'
 
       # Initialize grid
       self.initialize_grid(**self.cfg.grid)
@@ -127,14 +127,14 @@ class ModPAC():
       self.output_columns[name] = state.ColumnVariable(name, unit, Nz, 0., output = True)
    # }}}
 
-   def initialize_scalar(self, name, unit, initial_value):
+   def initialize_scalar(self, name, unit, initial_value, attributes = {}):
    # {{{
       from . import state
 
       if name in self.scalars:
          raise ValueError(f'{name} has already been initialized.')
       
-      self.scalars[name] = state.ScalarVariable(name, unit, initial_value)
+      self.scalars[name] = state.ScalarVariable(name, unit, initial_value, attributes = attributes)
    # }}}
 
    def initialize_grid(self, *, spacing = 'log_pressure_equal', Nz = 200, p_top = 0.1, **kwargs):
@@ -321,10 +321,10 @@ class ModPAC():
       self.__dict__['scon'] = scon
       self.__dict__['zenith'] = zenith
 
-      self.initialize_scalar('Tsfc', 'K', 300.)
-      self.initialize_scalar('emissivity', '1', 0.99)
-      self.initialize_scalar('albedo', '1', 0.3)
-      self.initialize_scalar('solar_zenith_angle', 'deg', 0.)
+      self.initialize_scalar('Tsfc',               'K',   300., attributes = dict(long_name = 'Surface temperture', standard_name = 'surface_temperature'))
+      self.initialize_scalar('emissivity',         '1',   0.99, attributes = dict(long_name = 'Surface emissivity'))
+      self.initialize_scalar('albedo',             '1',   0.3 , attributes = dict(long_name = 'Surface albedo', standard_name = 'surface_albedo'))
+      self.initialize_scalar('solar_zenith_angle', 'deg', 0.  , attributes = dict(long_name = 'Solar zenith angle', standard_name = 'solar_zenith_angle'))
 
       # Initialize zenith angle
       if zenith == 'fixed_specified':
@@ -394,6 +394,7 @@ class ModPAC():
       Emis = _s(state.emissivity)
       alb  = _s(state.albedo)
 
+      #cosz = np.cos(np.deg2rad(np.min([90., state.solar_zenith_angle[j_now]])))
       cosz = np.cos(np.deg2rad(state.solar_zenith_angle[j_now]))
       cosz = np.asfortranarray(cosz)
 
@@ -429,7 +430,7 @@ class ModPAC():
    # }}}
 
 ### Methods related to chemistry
-   def initialize_chemistry(self, *, mechanism = '', active = False, **kwargs):
+   def initialize_chemistry(self, *, mechanism = '', active = True, **kwargs):
    # {{{  
       from . import state
 
@@ -513,7 +514,7 @@ class ModPAC():
             state.column_values[s][j_now, :] = mstate.concentrations[i::stride] / nafull
    # }}}
 
-   def initialize_photolysis(self, *, mechanism = '', mapping = {}, active = False, parameterize_jNO = False):
+   def initialize_photolysis(self, *, mechanism = '', mapping = {}, active = True, parameterize_jNO = False):
 # {{{
       # tuv-x height coordinates are bottom up
       self.__dict__['do_photolysis'] = active
@@ -787,7 +788,7 @@ class ModPAC():
 
       outpath, runname = self.build_output_path()
 
-      print(f"Running integration '{runname}' for {nsteps} timesteps.")
+      print(f"Running integration '{runname}' for {nsteps} timesteps.", flush = True)
 
       dt_start = datetime.datetime.now()
 
@@ -851,7 +852,7 @@ class ModPAC():
          i_out += 1
 
       for i in range(i0, i0 + nsteps):
-         if i % 500 == 0: print(f"Step {i:>5d}, day {(i * dt) / 86400:>8.1f}.")
+         if i % 500 == 0: print(f"Step {i:>5d}, day {(i * dt) / 86400:>8.1f}.", flush = True)
 
          # Update externally varying parameters
          self.update_externals(s0, j_now, (i + 1) * dt)
@@ -915,7 +916,7 @@ class ModPAC():
 
          # Write restart
          i = i + 1
-         rs_attrs = dict(t0 = t0 + i*dt, 
+         rs_attrs = dict(t0 = i*dt, 
                          i0 = i0, 
                          i1 = i, 
                          j_old = j_old, 
