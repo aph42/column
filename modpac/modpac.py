@@ -345,6 +345,22 @@ class ModPAC():
 
          self.solar_zenith_angle = astr.zenith_from_declination(self.latitude, declination, local_hour)
 
+      elif zenith == 'daily_mean_computed':
+         # Zenith angle fixed, computed from latitude and initial date and (local) time
+
+         self.__dict__['initial_date'] = kwargs.get('initial_date', '2000-01-01')
+         self.__dict__['num_radiation_calls'] = kwargs.get('num_radiation_calls', 3)
+         self.__dict__['latitude'] = kwargs.get('latitude', 0.)
+
+         n = astr.date_to_n(self.initial_date)
+         declination = astr.declination(n)
+
+         angles, weights = astr.get_quadrature_angles_and_weights_gauss(self.latitude, declination, self.num_radiation_calls)
+         self.__dict__['quadrature_angles'] = angles
+         self.__dict__['quadrature_weights'] = weights
+
+         self.solar_zenith_angle = astr.zenith_dailymean_equivalent(self.latitude, n)
+
       elif zenith == 'diurnal_cycle':
          # Zenith angle goes through fixed diurnal cycle, appropriate to given latitude and initial date
          self.__dict__['initial_date'] = kwargs.get('initial_date', '2000-01-01')
@@ -394,10 +410,6 @@ class ModPAC():
       Emis = _s(state.emissivity)
       alb  = _s(state.albedo)
 
-      #cosz = np.cos(np.deg2rad(np.min([90., state.solar_zenith_angle[j_now]])))
-      cosz = np.cos(np.deg2rad(state.solar_zenith_angle[j_now]))
-      cosz = np.asfortranarray(cosz)
-
       lw = rrtmg.rrtmg_lw(pfull, phalf, \
                           T, TSfc, Emis, \
                           CO2,  H2O,  O3)
@@ -406,19 +418,36 @@ class ModPAC():
       output.lw_dflx[i_out, :] = lw['dflxlw'][0, :]
       output.lw_hr[i_out, :]   = lw['lwhr'][0, :]
 
-      #sw = rrtmg.rrtmg_sw_dm(pfull, phalf, \
-            #T, TSfc,  self.scon, 4, \
-            #alb, lat, dec, \
-            #CO2, H2O, O3)
+      if self.zenith in ['daily_mean_computed']:
+         # Do multiple calls to SW to calculate daily mean value
+         for n in range(self.num_radiation_calls):
+            cosz = np.cos(np.deg2rad(self.quadrature_angles[n]))
+            cosz = np.asfortranarray(cosz)
 
-      sw = rrtmg.rrtmg_sw(pfull, phalf, \
-            T, TSfc,  self.scon, \
-            cosz, alb, \
-            CO2, H2O, O3)
+            sw = rrtmg.rrtmg_sw(pfull, phalf, \
+                  T, TSfc,  self.scon, \
+                  cosz, alb, \
+                  CO2, H2O, O3)
 
-      output.sw_uflx[i_out, :] = sw['uflxsw'][0, :]
-      output.sw_dflx[i_out, :] = sw['dflxsw'][0, :]
-      output.sw_hr[i_out, :]   = sw['swhr'][0, :]
+            w = self.quadrature_weights[n]
+
+            output.sw_uflx[i_out, :] += w * sw['uflxsw'][0, :]
+            output.sw_dflx[i_out, :] += w * sw['dflxsw'][0, :]
+            output.sw_hr[i_out, :]   += w * sw['swhr'][0, :]
+
+      else:
+         #cosz = np.cos(np.deg2rad(np.min([90., state.solar_zenith_angle[j_now]])))
+         cosz = np.cos(np.deg2rad(state.solar_zenith_angle[j_now]))
+         cosz = np.asfortranarray(cosz)
+
+         sw = rrtmg.rrtmg_sw(pfull, phalf, \
+               T, TSfc,  self.scon, \
+               cosz, alb, \
+               CO2, H2O, O3)
+
+         output.sw_uflx[i_out, :] = sw['uflxsw'][0, :]
+         output.sw_dflx[i_out, :] = sw['dflxsw'][0, :]
+         output.sw_hr[i_out, :]   = sw['swhr'][0, :]
    # }}}
 
    def set_zenith_angle(self, state, j_now, t):
@@ -595,7 +624,8 @@ class ModPAC():
       # update ozone and temperature, then calculate photolysis rates using TUV-x
       # TUV-x height coordinates are bottom-up  
 
-      def full_to_half(v): return np.interp(self.zhalf, self.zfull, v)
+      def full_to_half(v):    return np.interp(self.zhalf, self.zfull, v)
+      def tuvx_to_full(jval): return jval.interp(vertical_edge = z_org/1000.).values
     
       # get the vertical profiles
       grids = self.tuvx.get_grid_map()
@@ -616,31 +646,59 @@ class ModPAC():
       o3_profile.edge_values = full_to_half(o3_mid)[::-1]
       #o3_profile.edge_values = full_to_half(state.O3[j_new,:])[::-1] * self.nahalf[::-1] * self.cfg.Av * 1e-6 # molec cm-3
       o3_profile.calculate_layer_densities(grids["height", "km"]) # provide the height grid for layer thicknesses
-      
+
       # calculate photolysis rates
-      #sza = np.deg2rad(np.min([90, state.solar_zenith_angle[j_new]]))
-      sza = np.deg2rad(state.solar_zenith_angle[j_new])
-      tuvx_output = self.tuvx.run(sza = sza, \
-                                  earth_sun_distance = 1.0)
-       
-      # update photolysis rates
+      if self.zenith in ['daily_mean_computed']:
+         # Do multiple calls to photolysis to calculate daily mean value
+         for n in range(self.num_radiation_calls):
+            sza = np.deg2rad(self.quadrature_angles[n])
+
+            w = self.quadrature_weights[n]
+
+            tuvx_output = self.tuvx.run(sza = sza, \
+                                        earth_sun_distance = 1.0)
+            tuvx_rates = tuvx_output['photolysis_rate_constants'] 
+
+            # Save photolysis rates for output
+            for micm_reaction in self.micm_to_tuvx.keys():
+               tuvx_key = self.micm_to_tuvx[micm_reaction]
+               jval = tuvx_to_full(tuvx_rates.sel(reaction = tuvx_key))
+               output.column_values[tuvx_key][i_out, :] += w * jval
+
+            if self.parameterize_jNO:
+               jval = photochem.calc_jNO(self, state, sza, j_new)
+               output.column_values['jno'][i_out, :] += w * jval
+      else:
+         #sza = np.deg2rad(np.min([90, state.solar_zenith_angle[j_new]]))
+         sza = np.deg2rad(state.solar_zenith_angle[j_new])
+
+         tuvx_output = self.tuvx.run(sza = sza, \
+                                     earth_sun_distance = 1.0)
+         tuvx_rates = tuvx_output['photolysis_rate_constants'] 
+          
+         # Save photolysis rates for output
+         for micm_reaction in self.micm_to_tuvx.keys():
+            tuvx_key = self.micm_to_tuvx[micm_reaction]
+            jval = tuvx_to_full(tuvx_rates.sel(reaction = tuvx_key))
+            output.column_values[tuvx_key][i_out, :] = jval
+
+         if self.parameterize_jNO:
+            jval = photochem.calc_jNO(self, state, sza, j_new)
+            output.column_values['jno'][i_out, :] = jval
+
+      # Update rates in MICM
+      jvals = {}
+
       for micm_reaction in self.micm_to_tuvx.keys():
-         micm_key = f'PHOTO.{micm_reaction}'
          tuvx_key = self.micm_to_tuvx[micm_reaction]
-         jval = tuvx_output['photolysis_rate_constants'].sel(reaction=tuvx_key)
-         jval = jval.interp(vertical_edge = z_org/1000.).values
-
-         # Set rates in MICM
-         self.MICMstate.set_user_defined_rate_parameters({micm_key:jval})
-
-         # Save rates for output
-         getattr(output,tuvx_key)[i_out, :] = jval
+         micm_key = f'PHOTO.{micm_reaction}'
+         jvals[micm_key] = output.column_values[tuvx_key][i_out, :]
 
       if self.parameterize_jNO:
          micm_key = f'PHOTO.jNO->N'
-         jval = photochem.calc_jNO(self, state, sza, j_new)
-         self.MICMstate.set_user_defined_rate_parameters({micm_key:jval})
-         getattr(output,'jno')[i_out, :] = jval
+         jvals[micm_key] = output.column_values['jno'][i_out, :]
+
+      self.MICMstate.set_user_defined_rate_parameters(jvals)
 # }}}
     
 ### Methods related to convection/convective adjustment
@@ -648,9 +706,9 @@ class ModPAC():
    # {{{
       self.__dict__['do_convection'] = active
 
-      self.initialize_var('T_conv','K',self.Nz, np.nan) # Moist adiabatic temperature profile from Tsfc
-      self.initialize_scalar('z_conv','m',np.nan) # top of convective adjustment
-
+      self.initialize_var('T_conv', 'K', self.Nz, 0.) # Moist adiabatic temperature profile from Tsfc
+      self.initialize_scalar('z_conv', 'm', 0.) # top of convective adjustment
+   # }}}
 
    def convective_adjustment(self, state, j_now):
    # {{{
@@ -671,7 +729,7 @@ class ModPAC():
          sp = self.columns[s]
          if sp.convect and not sp.fixed:
             v = state.column_values[s]
-            v[j_now, :] = np.where(self.zfull<=state.z_conv[j_now], sp[:], v[j_now,:])
+            v[j_now, :] = np.where(self.zfull <= state.z_conv[j_now], sp[:], v[j_now,:])
    # }}}
 
 ### Methods related to humidity (remove supersaturation, tropospheric RH)    
@@ -679,9 +737,8 @@ class ModPAC():
    # {{{
       self.__dict__['do_humidity'] = active
  
-      self.initialize_var('H2O_conv','vmr',self.Nz, np.nan) # convective water vapor profile
-       
-       # }}}
+      self.initialize_var('H2O_conv', 'vmr', self.Nz, 0.) # convective water vapor profile
+    # }}}
 
    def remove_supersat(self,state,j_now):
    # {{{
@@ -692,7 +749,7 @@ class ModPAC():
        saturation_vmr = self.calc_saturation_vmr(state.T[j_now,:],self.pfull)
  
        # remove water vapor in excess of supersaturation
-       state.H2O[j_now,:] = np.minimum(state.H2O[j_now,:],saturation_vmr)
+       state.H2O[j_now, :] = np.minimum(state.H2O[j_now, :], saturation_vmr)
 
    #     # relax tropospheric humidity
    #     state.H2O[j_now,:] = np.where(self.zfull<=state.z_conv[j_now],self.H2O_conv,state.H2O[j_now,:])
@@ -864,8 +921,8 @@ class ModPAC():
          self.step_advection(s0, z_org, j_old, j_now, dt)
 
          if self.do_photolysis:
-             # Diagnose photolysis rates
-             self.compute_photolysis(s0, o0, z_org, j_now, i_out)
+            # Diagnose photolysis rates
+            self.compute_photolysis(s0, o0, z_org, j_now, i_out)
 
          # Run chemistry for the time step
          if self.do_chemistry:

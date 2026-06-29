@@ -274,7 +274,7 @@ class OutputState(State):
       rec_var.setncattr("long_name", "time")
       rec_var.setncattr("standard_name", "time")
       rec_var.setncattr("units", f"days since {self.initial_date}")
-      rec_var.setncattr("calendar", f"365_day")
+      rec_var.setncattr("calendar", f"none")
 
       rec_var[:] = self.times / 86400.
 

@@ -34,6 +34,32 @@ class Configuration():
       self.humidity = d['humidity']
 # }}}
 
+   def copy(self):
+# {{{
+      new_cfg = Configuration(self.config_basename, self.config_root)
+
+      #new_cfg.config_file = self.config_file
+
+      #new_cfg.name = self.name
+      #new_cfg.version = self.version
+
+      # Copy constants and other root parameters
+      for k, v in self.__dict__.items():
+         if '_' not in k and k not in ['grid', 'dynamics', 'radiation', 'chemistry', 'photolysis', 'convection', 'humidity']:
+            new_cfg.__dict__[k] = v
+
+      # Copy all other parameters
+      new_cfg.grid       = self.grid.copy()
+      new_cfg.dynamics   = self.dynamics.copy()
+      new_cfg.radiation  = self.radiation.copy()
+      new_cfg.chemistry  = self.chemistry.copy()
+      new_cfg.photolysis = self.photolysis.copy()
+      new_cfg.convection = self.convection.copy()
+      new_cfg.humidity   = self.humidity.copy()
+
+      return new_cfg
+# }}}
+
    def from_json(self, filename):
 # {{{
       import json
