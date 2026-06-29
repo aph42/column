@@ -13,6 +13,64 @@ import modpac
 
 import xarray as xr
 
+def test_chapman_mechanism(ndays=200, Nz=200, daily_mean = False, kappa = 0.):
+# {{{
+   c = modpac.Configuration('chapman_rad')
+   c.radiation['active'] = True
+   c.chemistry['active'] = True
+   c.photolysis['active'] = True
+   c.grid['Nz'] = Nz
+
+   c.dynamics['kappa_zz'] = kappa
+
+   if daily_mean:
+      c.radiation['zenith'] = 'daily_mean_computed'
+      c.radiation['num_radiation_calls'] = 2
+      ts = 7200
+   else:
+      c.radiation['zenith'] = 'diurnal_cycle'
+      ts = 600
+
+   col = modpac.ModPAC(c, output_path_template = '/data/QOSM/chapman/{rundate}/')
+
+   pfull = 1000. * np.exp(-col.zfull / col.cfg.H)
+   phalf = 1000. * np.exp(-col.zhalf / col.cfg.H)
+   pf = pyg.Pres(pfull)
+   ph = pyg.Pres(phalf)
+
+   def to_col(var, pr):
+      vi = var.interpolate('pres', pr, inx = pyg.log(var.pres), outx = pyg.log(pr), d_above = 0., d_below = 0.)
+      return vi[:]
+
+   ref = pyg.open('/data/QOSM/basic_state_from_rce.nc')
+   conv = pyg.open('/data/QOSM/conv_profile.nc')
+
+   # mixing ratios
+   col.M[:] = 1.
+   col.O2[:] = 0.21
+   col.CO2[:] = 400e-6
+   col.O3[:] = 1e-6
+   col.H2O[:] = to_col(conv.H2O, pf)
+   col.H2O.fixed = True
+
+   col.w = 0.
+   # Surface properties
+   col.Tsfc = 300.
+   col.emissivity = 0.99
+   col.albedo  = 0.3
+
+   #col.T_conv[:]   = to_col(conv.T  , pf)
+   #col.H2O_conv[:] = to_col(conv.H2O, pf)
+
+   tspd = int(86400 // ts)
+
+   o0 = col.solve(tspd * ndays, ts, 1, write_output = False)
+
+   ds = modpac.to_pyg(col, o0)
+
+   return col, ds
+# }}}
+
 def test_strat_mechanism(ndays=200, Nz=200, kappa = 0.):
 # {{{
    c = modpac.Configuration('strat_rad')
@@ -93,7 +151,6 @@ def test_strat_mechanism(ndays=200, Nz=200, kappa = 0.):
    col.T_conv[:]   = to_col(conv.T  ,pf)
    col.H2O_conv[:] = to_col(conv.H2O,pf)
     
-   return col
    #return col
    #ts, o0 = col.solve(26*6, 600)
    o0 = col.solve(24 * ndays, 1200, 1, write_output = True)
